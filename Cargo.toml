@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "raft-client",
+    "raft-common",
+    "raft-server",
+    "raft-repl",
+]
