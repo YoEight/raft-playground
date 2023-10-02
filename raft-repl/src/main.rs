@@ -10,19 +10,21 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use std::io;
-use std::io::Stdout;
+use std::io::{Stdout, StdoutLock};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 use tui::backend::CrosstermBackend;
 use tui::Terminal;
+use tui_textarea::{Input, Key};
 
 fn main() -> eyre::Result<()> {
     let (sender, mailbox) = mpsc::channel();
 
     input_process(sender.clone());
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
     execute!(stdout, EnterAlternateScreen, SetTitle("raft-playground"))?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -40,7 +42,7 @@ fn main() -> eyre::Result<()> {
 
 fn app_loop(
     mut mailbox: mpsc::Receiver<ReplEvent>,
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut Terminal<CrosstermBackend<StdoutLock>>,
 ) -> crossterm::Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
@@ -60,8 +62,23 @@ fn app_loop(
             }
 
             Ok(event) => match event {
-                ReplEvent::CrossTermEvent(_) => {}
+                ReplEvent::Input(input) => match input {
+                    Input {
+                        key: Key::Enter, ..
+                    } => {
+                        if !state.on_command() {
+                            break;
+                        }
+                    }
+                    input => {
+                        state.on_input(input);
+                    }
+                },
             },
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            last_tick = Instant::now();
         }
     }
 

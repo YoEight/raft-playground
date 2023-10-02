@@ -1,3 +1,5 @@
+use tui_textarea::Input;
+
 pub enum ReplEvent {
-    CrossTermEvent(crossterm::event::Event),
+    Input(Input),
 }
