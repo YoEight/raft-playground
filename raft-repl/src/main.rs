@@ -10,7 +10,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use std::io;
-use std::io::{Stdout, StdoutLock};
+use std::io::StdoutLock;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -41,7 +41,7 @@ fn main() -> eyre::Result<()> {
 }
 
 fn app_loop(
-    mut mailbox: mpsc::Receiver<ReplEvent>,
+    mailbox: mpsc::Receiver<ReplEvent>,
     terminal: &mut Terminal<CrosstermBackend<StdoutLock>>,
 ) -> crossterm::Result<()> {
     let tick_rate = Duration::from_millis(250);

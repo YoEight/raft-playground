@@ -1,7 +1,7 @@
-use std::io::{Stdout, StdoutLock};
+use std::io::StdoutLock;
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
-use tui::style::Style;
+use tui::style::{Modifier, Style};
 use tui::widgets::{Block, Borders};
 use tui::Frame;
 use tui_textarea::{Input, TextArea};
@@ -46,9 +46,14 @@ impl View {
     pub fn new() -> Self {
         let mut shell = TextArea::default();
         shell.set_cursor_line_style(Style::default());
+        shell.set_cursor_style(
+            Style::default()
+                .add_modifier(Modifier::UNDERLINED)
+                .add_modifier(Modifier::RAPID_BLINK),
+        );
         shell.set_block(Block::default().borders(Borders::ALL));
 
-        let mut main_layout =
+        let main_layout =
             Layout::default().constraints([Constraint::Min(1), Constraint::Length(3)]);
 
         Self { shell, main_layout }
