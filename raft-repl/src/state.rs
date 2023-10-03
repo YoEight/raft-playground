@@ -1,10 +1,10 @@
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, Borders};
+use ratatui::Frame;
+use ratatui_textarea::{Input, TextArea};
 use std::io::StdoutLock;
-use tui::backend::CrosstermBackend;
-use tui::layout::{Constraint, Layout};
-use tui::style::{Modifier, Style};
-use tui::widgets::{Block, Borders};
-use tui::Frame;
-use tui_textarea::{Input, TextArea};
 
 pub struct State {
     view: View,

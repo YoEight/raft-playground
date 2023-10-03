@@ -9,14 +9,14 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use ratatui_textarea::{Input, Key};
 use std::io;
 use std::io::StdoutLock;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
-use tui::backend::CrosstermBackend;
-use tui::Terminal;
-use tui_textarea::{Input, Key};
 
 fn main() -> eyre::Result<()> {
     let (sender, mailbox) = mpsc::channel();
@@ -43,7 +43,7 @@ fn main() -> eyre::Result<()> {
 fn app_loop(
     mailbox: mpsc::Receiver<ReplEvent>,
     terminal: &mut Terminal<CrosstermBackend<StdoutLock>>,
-) -> crossterm::Result<()> {
+) -> io::Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
     let mut state = State::new();
