@@ -6,3 +6,16 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tonic = "0.10"
+bytes = "1.5"
+
+[dependencies.tokio]
+version = "1.32"
+features = ["full"]
+
+[dependencies.raft-common]
+path = "../raft-common"
+
+[dependencies.clap]
+version = "4.4"
+features = ["derive"]
