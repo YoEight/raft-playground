@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 tonic = "0.10"
 bytes = "1.5"
+rand = "0.8.5"
 
 [dependencies.tokio]
 version = "1.32"

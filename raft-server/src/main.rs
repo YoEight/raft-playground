@@ -1,14 +1,14 @@
 mod env;
 mod state;
+mod ticking;
 
 use crate::state::{NodeState, State};
 use clap::Parser;
 use raft_common::server::RaftServer;
 use raft_common::{EntriesReq, EntriesResp, VoteReq, VoteResp};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tonic::{transport, Request, Response, Status};
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct RaftImpl {
@@ -55,15 +55,6 @@ impl raft_common::server::Raft for RaftImpl {
     ) -> Result<Response<EntriesResp>, Status> {
         let request = request.into_inner();
 
-        if request.entries.is_empty() {
-            let term = self.state.current_term().await;
-
-            return Ok(Response::new(EntriesResp {
-                term,
-                success: true,
-            }));
-        }
-
         let leader_id = match request.leader_id.parse() {
             Err(e) => {
                 return Err(Status::invalid_argument(format!(
@@ -108,12 +99,18 @@ async fn main() -> Result<(), transport::Error> {
 
     println!("Listening on {}", addr);
 
-    let state = Arc::new(Mutex::new(State::default_with_seeds(opts.seeds)));
+    let mut state = State::default_with_seeds(opts.seeds);
+    state.init();
+    let state = NodeState::new(state);
+
+    let ticking_handle = ticking::spawn_ticking_process(state.clone());
 
     Server::builder()
-        .add_service(RaftServer::new(RaftImpl::new(NodeState::default())))
+        .add_service(RaftServer::new(RaftImpl::new(state)))
         .serve(addr)
         .await?;
+
+    ticking_handle.abort();
 
     Ok(())
 }
