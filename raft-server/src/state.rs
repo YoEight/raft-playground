@@ -1,13 +1,36 @@
+use crate::env::Seed;
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Default)]
 pub struct State {
+    pub seeds: HashMap<u16, Seed>,
     pub entries: Vec<Bytes>,
     pub term: u64,
     pub writer: u64,
+}
+
+impl State {
+    pub fn default_with_seeds(seeds: Vec<u16>) -> Self {
+        let mut this = State::default();
+
+        for seed in seeds {
+            this.seeds.insert(
+                seed,
+                Seed {
+                    id: Uuid::nil(),
+                    host: "127.0.0.1".to_string(),
+                    port: seed,
+                    channel: None,
+                },
+            );
+        }
+
+        this
+    }
 }
 
 #[derive(Clone)]

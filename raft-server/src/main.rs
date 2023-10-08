@@ -1,7 +1,7 @@
+mod env;
 mod state;
 
 use crate::state::{NodeState, State};
-use bytes::Bytes;
 use clap::Parser;
 use raft_common::server::RaftServer;
 use raft_common::{EntriesReq, EntriesResp, VoteReq, VoteResp};
@@ -96,6 +96,9 @@ impl raft_common::server::Raft for RaftImpl {
 struct Options {
     #[arg(long)]
     port: u16,
+
+    #[arg(long = "seed")]
+    seeds: Vec<u16>,
 }
 
 #[tokio::main]
@@ -105,7 +108,7 @@ async fn main() -> Result<(), transport::Error> {
 
     println!("Listening on {}", addr);
 
-    let state = Arc::new(Mutex::new(State::default()));
+    let state = Arc::new(Mutex::new(State::default_with_seeds(opts.seeds)));
 
     Server::builder()
         .add_service(RaftServer::new(RaftImpl::new(NodeState::default())))
