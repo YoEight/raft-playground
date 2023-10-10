@@ -1,10 +1,18 @@
+use crate::entry::Entry;
 use crate::env::Seed;
+use crate::vote_listener::VoteMsg;
+use crate::{ticking, vote_listener};
 use bytes::Bytes;
+use raft_common::client::RaftClient;
+use raft_common::VoteReq;
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
+use tonic::transport::Channel;
+use tonic::Request;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -45,11 +53,10 @@ impl ElectionTimeoutRange {
     }
 }
 
-// #[derive(Default)]
 pub struct State {
     pub id: Uuid,
     pub seeds: HashMap<u16, Seed>,
-    pub entries: Vec<Bytes>,
+    pub entries: Vec<Entry>,
     pub term: u64,
     pub writer: u64,
     pub status: Status,
@@ -90,10 +97,9 @@ impl State {
             this.seeds.insert(
                 seed,
                 Seed {
-                    id: Uuid::nil(),
                     host: "127.0.0.1".to_string(),
                     port: seed,
-                    channel: None,
+                    client: None,
                 },
             );
         }
@@ -101,30 +107,89 @@ impl State {
         this
     }
 
-    pub fn init(&mut self) {
+    pub fn start(mut self) -> NodeState {
         self.id = Uuid::new_v4();
         self.election_timeout_range.pick_timeout_value();
+
+        let (sender, recv) = tokio::sync::mpsc::unbounded_channel();
+        let node_state = NodeState::new(sender, self);
+
+        ticking::spawn_ticking_process(node_state.clone());
+        vote_listener::spawn_vote_listener(node_state.clone(), recv);
+
+        node_state
     }
 
     pub fn election_timeout(&self) -> bool {
         self.election_timeout.elapsed() >= self.election_timeout_range.duration
     }
+
+    pub fn switch_to_leader(&mut self) {
+        self.status = Status::Leader;
+        self.term += 1;
+    }
+
+    pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<VoteMsg>) {
+        self.status = Status::Candidate;
+        self.term += 1;
+        self.voted_for = Some(self.id);
+
+        let term = self.term;
+        // TODO - fetch the last entry index and term properly, currently we only need to get it from the
+        // `entries` field.
+        let last_log_index = self.commit_index;
+        let last_log_term = self.term;
+
+        for seed in self.seeds.values_mut() {
+            let mut client = if let Some(client) = seed.client.clone() {
+                client
+            } else {
+                let uri =
+                    hyper::Uri::from_maybe_shared(format!("http://{}:{}", "127.0.0.1", seed.port))
+                        .unwrap();
+
+                let hyper_client = hyper::Client::builder().http2_only(true).build_http();
+                let raft_client = RaftClient::with_origin(hyper_client, uri);
+                seed.client = Some(raft_client.clone());
+
+                raft_client
+            };
+
+            let candidate_id = self.id.to_string();
+            let local_sender = vote_sender.clone();
+
+            tokio::spawn(async move {
+                let resp = client
+                    .request_vote(Request::new(VoteReq {
+                        term,
+                        candidate_id,
+                        last_log_index,
+                        last_log_term,
+                    }))
+                    .await?
+                    .into_inner();
+
+                let _ = local_sender.send(VoteMsg::VoteReceived {
+                    term: resp.term,
+                    granted: resp.vote_granted,
+                });
+
+                Ok::<_, tonic::Status>(())
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct NodeState {
+    vote_sender: UnboundedSender<VoteMsg>,
     inner: Arc<Mutex<State>>,
 }
 
-impl Default for NodeState {
-    fn default() -> Self {
-        NodeState::new(State::default())
-    }
-}
-
 impl NodeState {
-    pub fn new(inner: State) -> Self {
+    pub fn new(vote_sender: UnboundedSender<VoteMsg>, inner: State) -> Self {
         Self {
+            vote_sender,
             inner: Arc::new(Mutex::new(inner)),
         }
     }
@@ -169,7 +234,7 @@ impl NodeState {
     }
 
     pub async fn on_ticking(&self) {
-        let state = self.inner.lock().await;
+        let mut state = self.inner.lock().await;
 
         // Means we are running in single node.
         if state.seeds.is_empty() {
@@ -177,8 +242,10 @@ impl NodeState {
         }
 
         if state.election_timeout() {
-            // TODO - Moving to candidate status.
+            state.switch_to_candidate(self.vote_sender.clone());
             return;
         }
     }
+
+    pub async fn on_vote_received(&self, term: u64, granted: bool) {}
 }

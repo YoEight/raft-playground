@@ -1,6 +1,8 @@
+mod entry;
 mod env;
 mod state;
 mod ticking;
+mod vote_listener;
 
 use crate::state::{NodeState, State};
 use clap::Parser;
@@ -8,7 +10,6 @@ use raft_common::server::RaftServer;
 use raft_common::{EntriesReq, EntriesResp, VoteReq, VoteResp};
 use tonic::transport::Server;
 use tonic::{transport, Request, Response, Status};
-use uuid::Uuid;
 
 #[derive(Clone)]
 struct RaftImpl {
@@ -100,17 +101,12 @@ async fn main() -> Result<(), transport::Error> {
     println!("Listening on {}", addr);
 
     let mut state = State::default_with_seeds(opts.seeds);
-    state.init();
-    let state = NodeState::new(state);
-
-    let ticking_handle = ticking::spawn_ticking_process(state.clone());
+    let node_state = state.start();
 
     Server::builder()
-        .add_service(RaftServer::new(RaftImpl::new(state)))
+        .add_service(RaftServer::new(RaftImpl::new(node_state)))
         .serve(addr)
         .await?;
-
-    ticking_handle.abort();
 
     Ok(())
 }
