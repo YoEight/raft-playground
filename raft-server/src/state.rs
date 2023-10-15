@@ -1,4 +1,4 @@
-use crate::entry::Entry;
+use crate::entry::{Entries, Entry};
 use crate::env::Seed;
 use crate::vote_listener::VoteMsg;
 use crate::{ticking, vote_listener};
@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
-use tonic::transport::Channel;
 use tonic::Request;
 use uuid::Uuid;
 
@@ -56,7 +55,7 @@ impl ElectionTimeoutRange {
 pub struct State {
     pub id: Uuid,
     pub seeds: HashMap<u16, Seed>,
-    pub entries: Vec<Entry>,
+    pub entries: Entries,
     pub term: u64,
     pub writer: u64,
     pub status: Status,
@@ -74,7 +73,7 @@ impl Default for State {
         Self {
             id: Default::default(),
             seeds: Default::default(),
-            entries: vec![],
+            entries: Entries::default(),
             term: 0,
             writer: 0,
             status: Default::default(),
@@ -135,10 +134,9 @@ impl State {
         self.voted_for = Some(self.id);
 
         let term = self.term;
-        // TODO - fetch the last entry index and term properly, currently we only need to get it from the
-        // `entries` field.
-        let last_log_index = self.commit_index;
-        let last_log_term = self.term;
+        let snapshot = self.entries.snapshot();
+        let last_log_index = snapshot.index;
+        let last_log_term = snapshot.term;
 
         for seed in self.seeds.values_mut() {
             let mut client = if let Some(client) = seed.client.clone() {
@@ -201,7 +199,30 @@ impl NodeState {
         last_log_index: u64,
         last_log_term: u64,
     ) -> (u64, bool) {
-        (0, false)
+        let mut state = self.inner.lock().await;
+
+        if state.term > term {
+            return (0, false);
+        }
+
+        let snapshot = state.entries.snapshot();
+
+        if let Some(id) = state.voted_for {
+            return (
+                state.term,
+                id == candidate_id && snapshot.index <= last_log_index,
+            );
+        } else {
+            if snapshot.index <= last_log_index && snapshot.term <= last_log_term {
+                state.voted_for = Some(candidate_id);
+                state.status = Status::Follower;
+                state.term = term;
+
+                return (term, true);
+            }
+
+            (0, false)
+        }
     }
 
     pub async fn append_entries(
@@ -214,6 +235,13 @@ impl NodeState {
         entries: Vec<Bytes>,
     ) -> (u64, bool) {
         let mut state = self.inner.lock().await;
+
+        if state.term > term {
+            return (state.term, false);
+        }
+
+        state.status = Status::Follower;
+        state.election_timeout = Instant::now();
 
         if state.status != Status::Follower {
             // we update our leader healthcheck detector;
