@@ -205,15 +205,15 @@ impl NodeState {
             return (0, false);
         }
 
-        let snapshot = state.entries.snapshot();
-
         if let Some(id) = state.voted_for {
             return (
                 state.term,
-                id == candidate_id && snapshot.index <= last_log_index,
+                id == candidate_id && state.entries.last_index() <= last_log_index,
             );
         } else {
-            if snapshot.index <= last_log_index && snapshot.term <= last_log_term {
+            if state.entries.last_index() <= last_log_index
+                && state.entries.last_term() <= last_log_term
+            {
                 state.voted_for = Some(candidate_id);
                 state.status = Status::Follower;
                 state.term = term;
@@ -229,28 +229,32 @@ impl NodeState {
         &self,
         term: u64,
         leader_id: Uuid,
-        pre_log_index: u64,
+        prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
         entries: Vec<Bytes>,
     ) -> (u64, bool) {
         let mut state = self.inner.lock().await;
 
-        if state.term > term {
+        if state.term > term || state.entries.contains_log(prev_log_index, prev_log_term) {
             return (state.term, false);
+        }
+
+        if state.term < term {
+            state.voted_for = None;
+            state.term = term;
         }
 
         state.status = Status::Follower;
         state.election_timeout = Instant::now();
 
-        if state.status != Status::Follower {
-            // we update our leader healthcheck detector;
-            state.election_timeout = Instant::now();
-        }
-
         // Means it's a heartbeat message.
         if entries.is_empty() {
             return (state.term, true);
+        }
+
+        if state.entries.last_index() > prev_log_index && state.entries.last_term() != term {
+            // TODO delete uncommitted entries.
         }
 
         (0, false)

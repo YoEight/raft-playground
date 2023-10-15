@@ -10,27 +10,36 @@ pub struct Entry {
 #[derive(Clone, Default)]
 pub struct Entries {
     inner: Vec<Entry>,
+    last_index: u64,
+    last_term: u64,
 }
 
 impl Entries {
     pub fn add(&mut self, entry: Entry) {
+        self.last_index += 1;
+        self.last_term = entry.term;
         self.inner.push(entry);
     }
 
-    pub fn snapshot(&self) -> Snapshot {
-        if let Some(last) = self.inner.last() {
-            return Snapshot {
-                term: last.term,
-                index: self.inner.len() as u64 - 1,
-            };
+    pub fn contains_log(&self, index: u64, term: u64) -> bool {
+        for entry in &self.inner {
+            if entry.index == index && entry.term == term {
+                return true;
+            }
+
+            if entry.index > index {
+                break;
+            }
         }
 
-        Snapshot::default()
+        false
     }
-}
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Snapshot {
-    pub term: u64,
-    pub index: u64,
+    pub fn last_index(&self) -> u64 {
+        self.last_index
+    }
+
+    pub fn last_term(&self) -> u64 {
+        self.last_term
+    }
 }
