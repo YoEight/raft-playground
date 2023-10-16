@@ -6,7 +6,7 @@ use raft_common::client::RaftClient;
 use raft_common::{Entry, VoteReq};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
@@ -66,6 +66,7 @@ pub struct State {
     pub match_index: HashMap<Uuid, u64>,
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
+    pub tally: HashSet<u16>,
 }
 
 impl Default for State {
@@ -84,6 +85,7 @@ impl Default for State {
             match_index: Default::default(),
             election_timeout: Instant::now(),
             election_timeout_range: Default::default(),
+            tally: Default::default(),
         }
     }
 }
@@ -125,7 +127,13 @@ impl State {
 
     pub fn switch_to_leader(&mut self) {
         self.status = Status::Leader;
-        self.term += 1;
+        self.tally.clear();
+        self.voted_for = None;
+        let term = self.term;
+        let last_log_index = self.entries.last_index();
+        let last_log_term = self.entries.last_term();
+
+        for seed in self.seeds.values_mut() {}
     }
 
     pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<VoteMsg>) {
@@ -138,22 +146,10 @@ impl State {
         let last_log_term = self.entries.last_term();
 
         for seed in self.seeds.values_mut() {
-            let mut client = if let Some(client) = seed.client.clone() {
-                client
-            } else {
-                let uri =
-                    hyper::Uri::from_maybe_shared(format!("http://{}:{}", "127.0.0.1", seed.port))
-                        .unwrap();
-
-                let hyper_client = hyper::Client::builder().http2_only(true).build_http();
-                let raft_client = RaftClient::with_origin(hyper_client, uri);
-                seed.client = Some(raft_client.clone());
-
-                raft_client
-            };
-
+            let mut client = seed.client();
             let candidate_id = self.id.to_string();
             let local_sender = vote_sender.clone();
+            let seed_port = seed.port;
 
             tokio::spawn(async move {
                 let resp = client
@@ -167,6 +163,7 @@ impl State {
                     .into_inner();
 
                 let _ = local_sender.send(VoteMsg::VoteReceived {
+                    port: seed_port,
                     term: resp.term,
                     granted: resp.vote_granted,
                 });
@@ -286,5 +283,30 @@ impl NodeState {
         }
     }
 
-    pub async fn on_vote_received(&self, term: u64, granted: bool) {}
+    pub async fn on_vote_received(&self, seed_port: u16, term: u64, granted: bool) {
+        let mut state = self.inner.lock().await;
+
+        // Probably out-of-order message.
+        if state.term < term {
+            return;
+        }
+
+        if state.term > term {
+            state.status = Status::Follower;
+            state.election_timeout_range.pick_timeout_value();
+            state.election_timeout = Instant::now();
+            state.voted_for = None;
+            state.next_index.clear();
+            state.match_index.clear();
+            return;
+        }
+
+        state.tally.insert(seed_port);
+
+        // Means we reached consensus, we can move to Leader status.
+        if state.tally.len() > state.seeds.len() / 2 {
+            state.switch_to_leader();
+            return;
+        }
+    }
 }

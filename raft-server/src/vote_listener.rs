@@ -3,7 +3,7 @@ use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
 pub enum VoteMsg {
-    VoteReceived { term: u64, granted: bool },
+    VoteReceived { port: u16, term: u64, granted: bool },
 }
 
 pub fn spawn_vote_listener(
@@ -13,8 +13,12 @@ pub fn spawn_vote_listener(
     tokio::spawn(async move {
         while let Some(msg) = recv.recv().await {
             match msg {
-                VoteMsg::VoteReceived { term, granted } => {
-                    state.on_vote_received(term, granted).await;
+                VoteMsg::VoteReceived {
+                    port,
+                    term,
+                    granted,
+                } => {
+                    state.on_vote_received(port, term, granted).await;
                 }
             }
         }
