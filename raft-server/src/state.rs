@@ -1,11 +1,11 @@
-use crate::entry::{Entries, Entry};
+use crate::entry::Entries;
 use crate::env::Seed;
 use crate::vote_listener::VoteMsg;
 use crate::{ticking, vote_listener};
-use bytes::Bytes;
 use raft_common::client::RaftClient;
-use raft_common::VoteReq;
+use raft_common::{Entry, VoteReq};
 use rand::{thread_rng, Rng};
+use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -134,9 +134,8 @@ impl State {
         self.voted_for = Some(self.id);
 
         let term = self.term;
-        let snapshot = self.entries.snapshot();
-        let last_log_index = snapshot.index;
-        let last_log_term = snapshot.term;
+        let last_log_index = self.entries.last_index();
+        let last_log_term = self.entries.last_term();
 
         for seed in self.seeds.values_mut() {
             let mut client = if let Some(client) = seed.client.clone() {
@@ -232,7 +231,7 @@ impl NodeState {
         prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
-        entries: Vec<Bytes>,
+        entries: Vec<Entry>,
     ) -> (u64, bool) {
         let mut state = self.inner.lock().await;
 
@@ -254,10 +253,18 @@ impl NodeState {
         }
 
         if state.entries.last_index() > prev_log_index && state.entries.last_term() != term {
-            // TODO delete uncommitted entries.
+            state
+                .entries
+                .remove_uncommitted_entries_from(prev_log_index, prev_log_term);
         }
 
-        (0, false)
+        if leader_commit > state.commit_index {
+            state.commit_index = min(leader_commit, entries.last().unwrap().index);
+        }
+
+        state.entries.append(entries);
+
+        (state.term, true)
     }
 
     pub async fn current_term(&self) -> u64 {
