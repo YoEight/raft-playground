@@ -3,7 +3,7 @@ use crate::env::Seed;
 use crate::vote_listener::VoteMsg;
 use crate::{ticking, vote_listener};
 use raft_common::client::RaftClient;
-use raft_common::{Entry, VoteReq};
+use raft_common::{EntriesReq, Entry, VoteReq};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -133,7 +133,21 @@ impl State {
         let last_log_index = self.entries.last_index();
         let last_log_term = self.entries.last_term();
 
-        for seed in self.seeds.values_mut() {}
+        for seed in self.seeds.values_mut() {
+            let mut client = seed.client();
+            tokio::spawn(async move {
+                let resp = client
+                    .append_entries(Request::new(EntriesReq {
+                        term,
+                        leader_id: "".to_string(),
+                        prev_log_index: 0,
+                        prev_log_term: 0,
+                        leader_commit: 0,
+                        entries: vec![],
+                    }))
+                    .await;
+            });
+        }
     }
 
     pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<VoteMsg>) {
