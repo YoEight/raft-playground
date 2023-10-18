@@ -1,6 +1,7 @@
 use crate::entry::Entries;
 use crate::env::Seed;
-use crate::vote_listener::VoteMsg;
+use crate::options::Options;
+use crate::vote_listener::{AppendEntriesResp, IncomingMsg};
 use crate::{ticking, vote_listener};
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, VoteReq};
@@ -91,32 +92,27 @@ impl Default for State {
 }
 
 impl State {
-    pub fn default_with_seeds(seeds: Vec<u16>) -> Self {
-        let mut this = State::default();
+    pub fn init(opts: Options) -> NodeState {
+        let mut state = State::default();
+        let (sender, recv) = tokio::sync::mpsc::unbounded_channel();
+        state.id = Uuid::new_v4();
+        state.election_timeout_range.pick_timeout_value();
 
-        for seed in seeds {
-            this.seeds.insert(
+        for seed in opts.seeds {
+            state.seeds.insert(
                 seed,
                 Seed {
+                    mailbox: sender.clone(),
                     host: "127.0.0.1".to_string(),
                     port: seed,
                     client: None,
                 },
             );
         }
-
-        this
-    }
-
-    pub fn start(mut self) -> NodeState {
-        self.id = Uuid::new_v4();
-        self.election_timeout_range.pick_timeout_value();
-
-        let (sender, recv) = tokio::sync::mpsc::unbounded_channel();
-        let node_state = NodeState::new(sender, self);
+        let node_state = NodeState::new(sender, state);
 
         ticking::spawn_ticking_process(node_state.clone());
-        vote_listener::spawn_vote_listener(node_state.clone(), recv);
+        vote_listener::spawn_incoming_msg_listener(node_state.clone(), recv);
 
         node_state
     }
@@ -133,69 +129,40 @@ impl State {
         let last_log_index = self.entries.last_index();
         let last_log_term = self.entries.last_term();
 
+        // Send heartbeat request to assert dominance.
         for seed in self.seeds.values_mut() {
-            let mut client = seed.client();
-            tokio::spawn(async move {
-                let resp = client
-                    .append_entries(Request::new(EntriesReq {
-                        term,
-                        leader_id: "".to_string(),
-                        prev_log_index: 0,
-                        prev_log_term: 0,
-                        leader_commit: 0,
-                        entries: vec![],
-                    }))
-                    .await;
-            });
+            seed.send_heartbeat(
+                term,
+                self.id,
+                last_log_index,
+                last_log_term,
+                self.commit_index,
+            );
         }
     }
 
-    pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<VoteMsg>) {
+    pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<IncomingMsg>) {
         self.status = Status::Candidate;
         self.term += 1;
         self.voted_for = Some(self.id);
 
-        let term = self.term;
         let last_log_index = self.entries.last_index();
         let last_log_term = self.entries.last_term();
 
         for seed in self.seeds.values_mut() {
-            let mut client = seed.client();
-            let candidate_id = self.id.to_string();
-            let local_sender = vote_sender.clone();
-            let seed_port = seed.port;
-
-            tokio::spawn(async move {
-                let resp = client
-                    .request_vote(Request::new(VoteReq {
-                        term,
-                        candidate_id,
-                        last_log_index,
-                        last_log_term,
-                    }))
-                    .await?
-                    .into_inner();
-
-                let _ = local_sender.send(VoteMsg::VoteReceived {
-                    port: seed_port,
-                    term: resp.term,
-                    granted: resp.vote_granted,
-                });
-
-                Ok::<_, tonic::Status>(())
-            });
+            seed.request_vote(self.term, self.id, last_log_index, last_log_term);
         }
     }
 }
 
 #[derive(Clone)]
 pub struct NodeState {
-    vote_sender: UnboundedSender<VoteMsg>,
+    vote_sender: UnboundedSender<IncomingMsg>,
     inner: Arc<Mutex<State>>,
 }
 
 impl NodeState {
-    pub fn new(vote_sender: UnboundedSender<VoteMsg>, inner: State) -> Self {
+    pub fn new(vote_sender: UnboundedSender<IncomingMsg>, inner: State) -> Self {
         Self {
             vote_sender,
             inner: Arc::new(Mutex::new(inner)),
@@ -315,12 +282,22 @@ impl NodeState {
             return;
         }
 
-        state.tally.insert(seed_port);
+        if granted {
+            state.tally.insert(seed_port);
 
-        // Means we reached consensus, we can move to Leader status.
-        if state.tally.len() > state.seeds.len() / 2 {
-            state.switch_to_leader();
-            return;
+            // Means we reached consensus, we can move to Leader status.
+            if state.tally.len() > state.seeds.len() / 2 {
+                state.switch_to_leader();
+                return;
+            }
         }
+    }
+
+    pub async fn on_append_entries_resp(
+        &self,
+        seed_port: u16,
+        resp: tonic::Result<AppendEntriesResp>,
+    ) {
+        let mut state = self.inner.lock().await;
     }
 }

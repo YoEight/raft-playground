@@ -1,6 +1,8 @@
+use crate::vote_listener::IncomingMsg;
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
-use raft_common::{EntriesReq, Entry};
+use raft_common::{EntriesReq, Entry, VoteReq};
+use tokio::sync::mpsc::UnboundedSender;
 use tonic::Request;
 use uuid::Uuid;
 
@@ -8,6 +10,7 @@ pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
 #[derive(Debug)]
 pub struct Seed {
+    pub mailbox: UnboundedSender<IncomingMsg>,
     pub host: String,
     pub port: u16,
     pub client: Option<RaftClient<HyperClient>>,
@@ -28,6 +31,38 @@ impl Seed {
 
             raft_client
         }
+    }
+
+    pub fn request_vote(
+        &mut self,
+        term: u64,
+        candidate_id: Uuid,
+        last_log_index: u64,
+        last_log_term: u64,
+    ) {
+        let mut client = self.client();
+        let sender = self.mailbox.clone();
+        let port = self.port;
+
+        tokio::spawn(async move {
+            let resp = client
+                .request_vote(Request::new(VoteReq {
+                    term,
+                    candidate_id: candidate_id.to_string(),
+                    last_log_index,
+                    last_log_term,
+                }))
+                .await?
+                .into_inner();
+
+            let _ = sender.send(IncomingMsg::VoteReceived {
+                port,
+                term: resp.term,
+                granted: resp.vote_granted,
+            });
+
+            Ok::<_, tonic::Status>(())
+        });
     }
 
     pub fn send_heartbeat(

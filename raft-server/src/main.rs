@@ -1,5 +1,6 @@
 mod entry;
 mod env;
+mod options;
 mod state;
 mod ticking;
 mod vote_listener;
@@ -83,25 +84,14 @@ impl raft_common::server::Raft for RaftImpl {
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Options {
-    #[arg(long)]
-    port: u16,
-
-    #[arg(long = "seed")]
-    seeds: Vec<u16>,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), transport::Error> {
-    let opts = Options::parse();
+    let opts = options::Options::parse();
     let addr = format!("127.0.0.1:{}", opts.port).parse().unwrap();
 
     println!("Listening on {}", addr);
 
-    let mut state = State::default_with_seeds(opts.seeds);
-    let node_state = state.start();
+    let node_state = State::init(opts);
 
     Server::builder()
         .add_service(RaftServer::new(RaftImpl::new(node_state)))
