@@ -56,4 +56,16 @@ impl Entries {
     pub fn last_term(&self) -> u64 {
         self.last_term
     }
+
+    pub fn entry_term(&self, index: u64) -> u64 {
+        for entry in &self.inner {
+            if entry.index != index {
+                continue;
+            }
+
+            return entry.term;
+        }
+
+        panic!("Entry at index {} is not found", index);
+    }
 }

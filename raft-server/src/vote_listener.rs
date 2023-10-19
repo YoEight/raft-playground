@@ -10,6 +10,8 @@ pub enum IncomingMsg {
     },
     AppendEntriesResp {
         port: u16,
+        prev_log_index: u64,
+        prev_log_term: u64,
         resp: tonic::Result<AppendEntriesResp>,
     },
 }
@@ -34,8 +36,15 @@ pub fn spawn_incoming_msg_listener(
                     state.on_vote_received(port, term, granted).await;
                 }
 
-                IncomingMsg::AppendEntriesResp { port, resp } => {
-                    state.on_append_entries_resp(port, resp).await;
+                IncomingMsg::AppendEntriesResp {
+                    port,
+                    prev_log_index,
+                    prev_log_term,
+                    resp,
+                } => {
+                    state
+                        .on_append_entries_resp(port, prev_log_index, prev_log_term, resp)
+                        .await;
                 }
             }
         }

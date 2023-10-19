@@ -63,8 +63,8 @@ pub struct State {
     pub voted_for: Option<Uuid>,
     pub commit_index: u64,
     pub last_applied: u64,
-    pub next_index: HashMap<Uuid, u64>,
-    pub match_index: HashMap<Uuid, u64>,
+    pub next_index: HashMap<u16, u64>,
+    pub match_index: HashMap<u16, u64>,
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
     pub tally: HashSet<u16>,
@@ -125,17 +125,21 @@ impl State {
         self.status = Status::Leader;
         self.tally.clear();
         self.voted_for = None;
-        let term = self.term;
-        let last_log_index = self.entries.last_index();
-        let last_log_term = self.entries.last_term();
 
+        let last_log_index = self.entries.last_index();
         // Send heartbeat request to assert dominance.
         for seed in self.seeds.values_mut() {
+            self.next_index
+                .entry(seed.port)
+                .or_insert(last_log_index + 1);
+
+            let prev_log_index = *self.match_index.entry(seed.port).or_insert(0);
+            let prev_log_term = self.entries.entry_term(prev_log_index);
             seed.send_heartbeat(
-                term,
+                self.term,
                 self.id,
-                last_log_index,
-                last_log_term,
+                prev_log_index,
+                prev_log_term,
                 self.commit_index,
             );
         }
@@ -213,7 +217,7 @@ impl NodeState {
     ) -> (u64, bool) {
         let mut state = self.inner.lock().await;
 
-        if state.term > term || state.entries.contains_log(prev_log_index, prev_log_term) {
+        if state.term > term {
             return (state.term, false);
         }
 
@@ -222,8 +226,17 @@ impl NodeState {
             state.term = term;
         }
 
-        state.status = Status::Follower;
+        // I'm expecting  it to be safe resetting the election timeout in this case.
+        // Even if the replication request doesn't have a shared point of reference, the
+        // term is a valid value and it seems we have an healthy active leader just
+        // figuring out.
         state.election_timeout = Instant::now();
+        state.status = Status::Follower;
+
+        // Current node doesn't have that point of reference from this index position.
+        if !state.entries.contains_log(prev_log_index, prev_log_term) {
+            return (state.term, false);
+        }
 
         // Means it's a heartbeat message.
         if entries.is_empty() {
@@ -296,6 +309,8 @@ impl NodeState {
     pub async fn on_append_entries_resp(
         &self,
         seed_port: u16,
+        prev_log_index: u64,
+        prev_log_term: u64,
         resp: tonic::Result<AppendEntriesResp>,
     ) {
         let mut state = self.inner.lock().await;

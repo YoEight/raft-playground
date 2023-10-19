@@ -1,4 +1,4 @@
-use crate::vote_listener::IncomingMsg;
+use crate::vote_listener::{AppendEntriesResp, IncomingMsg};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, VoteReq};
@@ -93,6 +93,8 @@ impl Seed {
         entries: Vec<Entry>,
     ) {
         let mut client = self.client();
+        let port = self.port;
+        let sender = self.mailbox.clone();
         tokio::spawn(async move {
             let resp = client
                 .append_entries(Request::new(EntriesReq {
@@ -103,7 +105,21 @@ impl Seed {
                     leader_commit,
                     entries,
                 }))
-                .await;
+                .await
+                .map(|resp| {
+                    let resp = resp.into_inner();
+                    AppendEntriesResp {
+                        term: resp.term,
+                        success: resp.success,
+                    }
+                });
+
+            let _ = sender.send(IncomingMsg::AppendEntriesResp {
+                port,
+                prev_log_index,
+                prev_log_term,
+                resp,
+            });
         });
     }
 }
