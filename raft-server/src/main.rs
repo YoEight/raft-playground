@@ -1,10 +1,12 @@
 mod entry;
 mod env;
+mod machine;
 mod options;
 mod state;
 mod ticking;
 mod vote_listener;
 
+use crate::machine::{Node, Persistent};
 use crate::state::{NodeState, State};
 use clap::Parser;
 use raft_common::server::RaftServer;
@@ -14,12 +16,12 @@ use tonic::{transport, Request, Response, Status};
 
 #[derive(Clone)]
 struct RaftImpl {
-    state: NodeState,
+    node: Node,
 }
 
 impl RaftImpl {
-    fn new(state: NodeState) -> Self {
-        Self { state }
+    fn new(node: Node) -> Self {
+        Self { node }
     }
 }
 
@@ -39,7 +41,7 @@ impl raft_common::server::Raft for RaftImpl {
         };
 
         let (term, vote_granted) = self
-            .state
+            .node
             .request_vote(
                 vote.term,
                 candidate_id,
@@ -69,7 +71,7 @@ impl raft_common::server::Raft for RaftImpl {
         };
 
         let (term, success) = self
-            .state
+            .node
             .append_entries(
                 request.term,
                 leader_id,
@@ -91,10 +93,11 @@ async fn main() -> Result<(), transport::Error> {
 
     println!("Listening on {}", addr);
 
-    let node_state = State::init(opts);
+    let persistent = Persistent::load();
+    let node = machine::start(persistent);
 
     Server::builder()
-        .add_service(RaftServer::new(RaftImpl::new(node_state)))
+        .add_service(RaftServer::new(RaftImpl::new(node)))
         .serve(addr)
         .await?;
 
