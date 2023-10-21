@@ -1,7 +1,7 @@
 use crate::vote_listener::{AppendEntriesResp, IncomingMsg};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
-use raft_common::{EntriesReq, Entry, VoteReq};
+use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
 use tokio::sync::mpsc::UnboundedSender;
 use tonic::Request;
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl Seed {
     pub fn request_vote(
         &mut self,
         term: u64,
-        candidate_id: Uuid,
+        candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
     ) {
@@ -48,7 +48,7 @@ impl Seed {
             let resp = client
                 .request_vote(Request::new(VoteReq {
                     term,
-                    candidate_id: candidate_id.to_string(),
+                    candidate_id: Some(candidate_id),
                     last_log_index,
                     last_log_term,
                 }))
@@ -68,7 +68,7 @@ impl Seed {
     pub fn send_heartbeat(
         &mut self,
         term: u64,
-        leader_id: Uuid,
+        leader_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
@@ -86,7 +86,7 @@ impl Seed {
     pub fn send_append_entries(
         &mut self,
         term: u64,
-        leader_id: Uuid,
+        leader_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
@@ -99,7 +99,7 @@ impl Seed {
             let resp = client
                 .append_entries(Request::new(EntriesReq {
                     term,
-                    leader_id: leader_id.to_string(),
+                    leader_id: Some(leader_id),
                     prev_log_index,
                     prev_log_term,
                     leader_commit,

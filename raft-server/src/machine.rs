@@ -1,6 +1,6 @@
 use crate::entry::Entries;
 use crate::state::{ElectionTimeoutRange, Status};
-use raft_common::Entry;
+use raft_common::{Entry, NodeId};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 pub enum Msg {
     RequestVote {
         term: u64,
-        candidate_id: Uuid,
+        candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
         resp: oneshot::Sender<(u64, bool)>,
@@ -21,7 +21,7 @@ pub enum Msg {
 
     AppendEntries {
         term: u64,
-        leader_id: Uuid,
+        leader_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
@@ -30,7 +30,7 @@ pub enum Msg {
     },
 
     VotedReceived {
-        node_id: Uuid,
+        node_id: NodeId,
         term: u64,
         granted: bool,
     },
@@ -39,7 +39,7 @@ pub enum Msg {
 }
 
 pub struct Persistent {
-    pub id: Uuid,
+    pub id: NodeId,
     pub entries: Entries,
     pub term: u64,
     pub commit_index: u64,
@@ -60,12 +60,12 @@ impl Persistent {
 
 pub struct Volatile {
     pub status: Status,
-    pub voted_for: Option<Uuid>,
+    pub voted_for: Option<NodeId>,
     pub next_index: HashMap<u16, u64>,
     pub match_index: HashMap<u16, u64>,
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
-    pub tally: HashSet<Uuid>,
+    pub tally: HashSet<NodeId>,
 }
 
 impl Default for Volatile {
@@ -91,7 +91,7 @@ impl Node {
     pub async fn request_vote(
         &self,
         term: u64,
-        candidate_id: Uuid,
+        candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
     ) -> (u64, bool) {
@@ -116,7 +116,7 @@ impl Node {
     pub async fn append_entries(
         &self,
         term: u64,
-        leader_id: Uuid,
+        leader_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
         leader_commit: u64,
@@ -231,7 +231,7 @@ fn on_vote_received(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     cluster_size: usize,
-    node_id: Uuid,
+    node_id: NodeId,
     term: u64,
     granted: bool,
 ) {
@@ -265,7 +265,7 @@ fn on_append_entries(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     term: u64,
-    leader_id: Uuid,
+    leader_id: NodeId,
     prev_log_index: u64,
     prev_log_term: u64,
     leader_commit: u64,
@@ -319,7 +319,7 @@ fn on_request_vote(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     term: u64,
-    candidate_id: Uuid,
+    candidate_id: NodeId,
     last_log_index: u64,
     last_log_term: u64,
 ) -> (u64, bool) {
@@ -327,7 +327,7 @@ fn on_request_vote(
         return (0, false);
     }
 
-    if let Some(id) = volatile.voted_for {
+    if let Some(id) = volatile.voted_for.clone() {
         return (
             persistent.term,
             id == candidate_id && persistent.entries.last_index() <= last_log_index,

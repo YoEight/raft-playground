@@ -1,5 +1,6 @@
 mod entry;
 mod env;
+mod id;
 mod machine;
 mod options;
 mod state;
@@ -29,15 +30,10 @@ impl RaftImpl {
 impl raft_common::server::Raft for RaftImpl {
     async fn request_vote(&self, request: Request<VoteReq>) -> Result<Response<VoteResp>, Status> {
         let vote = request.into_inner();
-        let candidate_id = match vote.candidate_id.parse() {
-            Err(e) => {
-                return Err(Status::invalid_argument(format!(
-                    "Invalid candidate_id format: {}",
-                    e
-                )))
-            }
-
-            Ok(id) => id,
+        let candidate_id = if let Some(id) = vote.candidate_id {
+            id
+        } else {
+            return Err(Status::invalid_argument("Candidate id is not provided"));
         };
 
         let (term, vote_granted) = self
@@ -59,15 +55,10 @@ impl raft_common::server::Raft for RaftImpl {
     ) -> Result<Response<EntriesResp>, Status> {
         let request = request.into_inner();
 
-        let leader_id = match request.leader_id.parse() {
-            Err(e) => {
-                return Err(Status::invalid_argument(format!(
-                    "Invalid candidate_id format: {}",
-                    e
-                )))
-            }
-
-            Ok(id) => id,
+        let leader_id = if let Some(id) = request.leader_id {
+            id
+        } else {
+            return Err(Status::invalid_argument("Candidate id not provided"));
         };
 
         let (term, success) = self

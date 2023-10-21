@@ -4,7 +4,7 @@ use crate::options::Options;
 use crate::vote_listener::{AppendEntriesResp, IncomingMsg};
 use crate::{ticking, vote_listener};
 use raft_common::client::RaftClient;
-use raft_common::{EntriesReq, Entry, VoteReq};
+use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -54,13 +54,13 @@ impl ElectionTimeoutRange {
 }
 
 pub struct State {
-    pub id: Uuid,
+    pub id: NodeId,
     pub seeds: HashMap<u16, Seed>,
     pub entries: Entries,
     pub term: u64,
     pub writer: u64,
     pub status: Status,
-    pub voted_for: Option<Uuid>,
+    pub voted_for: Option<NodeId>,
     pub commit_index: u64,
     pub last_applied: u64,
     pub next_index: HashMap<u16, u64>,
@@ -70,10 +70,13 @@ pub struct State {
     pub tally: HashSet<u16>,
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    fn new(host: impl AsRef<str>, port: u16) -> Self {
         Self {
-            id: Default::default(),
+            id: NodeId {
+                host: host.as_ref().to_string(),
+                port: port as u32,
+            },
             seeds: Default::default(),
             entries: Entries::default(),
             term: 0,
@@ -89,13 +92,10 @@ impl Default for State {
             tally: Default::default(),
         }
     }
-}
 
-impl State {
     pub fn init(opts: Options) -> NodeState {
-        let mut state = State::default();
+        let mut state = State::new("127.0.0.1", opts.port);
         let (sender, recv) = tokio::sync::mpsc::unbounded_channel();
-        state.id = Uuid::new_v4();
         state.election_timeout_range.pick_timeout_value();
 
         for seed in opts.seeds {
@@ -137,7 +137,7 @@ impl State {
             let prev_log_term = self.entries.entry_term(prev_log_index);
             seed.send_heartbeat(
                 self.term,
-                self.id,
+                self.id.clone(),
                 prev_log_index,
                 prev_log_term,
                 self.commit_index,
@@ -148,13 +148,13 @@ impl State {
     pub fn switch_to_candidate(&mut self, vote_sender: UnboundedSender<IncomingMsg>) {
         self.status = Status::Candidate;
         self.term += 1;
-        self.voted_for = Some(self.id);
+        self.voted_for = Some(self.id.clone());
 
         let last_log_index = self.entries.last_index();
         let last_log_term = self.entries.last_term();
 
         for seed in self.seeds.values_mut() {
-            seed.request_vote(self.term, self.id, last_log_index, last_log_term);
+            seed.request_vote(self.term, self.id.clone(), last_log_index, last_log_term);
         }
     }
 }
@@ -176,7 +176,7 @@ impl NodeState {
     pub async fn request_vote(
         &self,
         term: u64,
-        candidate_id: Uuid,
+        candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
     ) -> (u64, bool) {
@@ -186,7 +186,7 @@ impl NodeState {
             return (0, false);
         }
 
-        if let Some(id) = state.voted_for {
+        if let Some(id) = state.voted_for.clone() {
             return (
                 state.term,
                 id == candidate_id && state.entries.last_index() <= last_log_index,

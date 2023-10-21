@@ -6,9 +6,14 @@ service Raft {
   rpc AppendEntries(EntriesReq) returns (EntriesResp);
 }
 
+message NodeId {
+  string host = 1;
+  uint32 port = 2;
+}
+
 message VoteReq {
-  uint64 term = 1;
-  string candidate_id = 2;
+  NodeId candidate_id = 1;
+  uint64 term = 2;
   uint64 last_log_index = 3;
   uint64 last_log_term = 4;
 }
@@ -25,8 +30,8 @@ message Entry {
 }
 
 message EntriesReq {
-  uint64 term = 1;
-  string leader_id = 2;
+  NodeId leader_id = 1;
+  uint64 term = 2;
   uint64 prev_log_index = 3;
   uint64 prev_log_term = 4;
   uint64 leader_commit = 5;

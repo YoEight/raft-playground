@@ -10,4 +10,4 @@ pub mod server {
     pub use super::proto::raft_server::*;
 }
 
-pub use proto::{EntriesReq, EntriesResp, Entry, VoteReq, VoteResp};
+pub use proto::{EntriesReq, EntriesResp, Entry, NodeId, VoteReq, VoteResp};
