@@ -68,4 +68,20 @@ impl Entries {
 
         panic!("Entry at index {} is not found", index);
     }
+
+    pub fn get_previous_entry(&self, ref_index: u64) -> (u64, u64) {
+        let mut index = 0u64;
+        let mut term = 1u64;
+
+        for entry in &self.inner {
+            if entry.index == ref_index {
+                break;
+            }
+
+            index = entry.index;
+            term = entry.term;
+        }
+
+        (index, term)
+    }
 }

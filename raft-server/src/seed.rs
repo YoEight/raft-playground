@@ -7,7 +7,7 @@ use tonic::Request;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Seed {
     pub id: NodeId,
     pub mailbox: Sender<Msg>,

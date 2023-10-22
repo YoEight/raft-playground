@@ -11,6 +11,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
+const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
+
 pub enum Msg {
     RequestVote {
         term: u64,
@@ -118,6 +120,7 @@ pub struct Volatile {
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
     pub tally: HashSet<NodeId>,
+    pub heartbeat_timeout: Instant,
 }
 
 impl Volatile {
@@ -132,6 +135,7 @@ impl Volatile {
             election_timeout: Instant::now(),
             election_timeout_range: Default::default(),
             tally: Default::default(),
+            heartbeat_timeout: Instant::now(),
         }
     }
 
@@ -146,10 +150,22 @@ impl Volatile {
     pub fn reset(&mut self) {
         self.voted_for = None;
         self.tally.clear();
+        self.match_index.clear();
+        self.next_index.clear();
     }
 
     pub fn election_timeout(&self) -> bool {
         self.election_timeout.elapsed() >= self.election_timeout_range.duration
+    }
+
+    pub fn node(&self, node_id: &NodeId) -> &Seed {
+        for seed in &self.seeds {
+            if &seed.id == node_id {
+                return seed;
+            }
+        }
+
+        panic!("Unknown node {}:{}", node_id.host, node_id.port)
     }
 }
 
@@ -313,7 +329,7 @@ fn state_machine(
     }
 }
 
-fn on_vote_received(
+pub fn on_vote_received(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     node_id: NodeId,
@@ -345,7 +361,7 @@ fn on_vote_received(
     }
 }
 
-fn on_append_entries(
+pub fn on_append_entries(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     term: u64,
@@ -399,7 +415,7 @@ fn on_append_entries(
     (persistent.term, true)
 }
 
-fn on_request_vote(
+pub fn on_request_vote(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     term: u64,
@@ -431,7 +447,7 @@ fn on_request_vote(
     }
 }
 
-fn on_append_entries_resp(
+pub fn on_append_entries_resp(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
     node_id: NodeId,
@@ -439,6 +455,59 @@ fn on_append_entries_resp(
     prev_log_term: u64,
     resp: tonic::Result<AppendEntriesResp>,
 ) {
+    if volatile.status != Status::Leader {
+        return;
+    }
+
+    if let Ok(resp) = resp {
+        if !resp.success {
+            // In this case we decrease what we thought was the next entry index of the follower
+            // node. From there we find the previous entry to this index and pass it as a point of
+            // reference to maintain log consistency.
+            let next_index = volatile.next_index.get_mut(&node_id).unwrap();
+            *next_index -= 1;
+
+            let (prev_log_index, prev_log_term) =
+                persistent.entries.get_previous_entry(*next_index);
+            let entries = Vec::new();
+            let seed = volatile.node(&node_id);
+
+            seed.send_append_entries(
+                persistent.term,
+                volatile.id.clone(),
+                prev_log_index,
+                prev_log_term,
+                persistent.commit_index,
+                entries,
+            );
+
+            return;
+        }
+    } else {
+        // In that case we just keep retrying because it means the follower was not reachable.
+        let seed = volatile.node(&node_id);
+        let entries = Vec::new();
+
+        seed.send_append_entries(
+            persistent.term,
+            volatile.id.clone(),
+            prev_log_index,
+            prev_log_term,
+            persistent.commit_index,
+            entries,
+        );
+    }
+}
+
+fn find_known_reference_point(
+    persistent: &mut Persistent,
+    volatile: &mut Volatile,
+    node_id: NodeId,
+) -> (u64, u64) {
+    let prev_log_index = *volatile.match_index.entry(node_id).or_insert(0);
+    let prev_log_term = persistent.entries.entry_term(prev_log_index);
+
+    (prev_log_index, prev_log_term)
 }
 
 fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
@@ -447,14 +516,14 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
 
     let last_log_index = persistent.entries.last_index();
     // Send heartbeat request to assert dominance.
-    for seed in &volatile.seeds {
+    for seed in volatile.seeds.clone() {
         volatile
             .next_index
             .entry(seed.id.clone())
             .or_insert(last_log_index + 1);
 
-        let prev_log_index = *volatile.match_index.entry(seed.id.clone()).or_insert(0);
-        let prev_log_term = persistent.entries.entry_term(prev_log_index);
+        let (prev_log_index, prev_log_term) =
+            find_known_reference_point(persistent, volatile, seed.id.clone());
 
         seed.send_heartbeat(
             persistent.term,
@@ -484,13 +553,32 @@ fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
     }
 }
 
-fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
+pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
     // Means we are running in single node.
     if volatile.seeds.is_empty() {
         return;
     }
 
-    if volatile.election_timeout() {
+    if volatile.heartbeat_timeout.elapsed() >= HEARTBEAT_DELAY && volatile.status == Status::Leader
+    {
+        for seed in volatile.seeds.clone() {
+            let (prev_log_index, prev_log_term) =
+                find_known_reference_point(persistent, volatile, seed.id.clone());
+
+            seed.send_heartbeat(
+                persistent.term,
+                volatile.id.clone(),
+                prev_log_index,
+                prev_log_term,
+                persistent.commit_index,
+            );
+        }
+
+        volatile.heartbeat_timeout = Instant::now();
+        return;
+    }
+
+    if volatile.election_timeout() && volatile.status != Status::Leader {
         switch_to_candidate(persistent, volatile);
         return;
     }
