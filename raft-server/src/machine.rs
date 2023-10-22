@@ -1,14 +1,15 @@
 use crate::entry::Entries;
-use crate::state::{ElectionTimeoutRange, Status};
+use crate::seed::Seed;
 use raft_common::{Entry, NodeId};
+use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::thread;
-use std::time::Instant;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use uuid::Uuid;
 
 pub enum Msg {
     RequestVote {
@@ -29,13 +30,62 @@ pub enum Msg {
         resp: oneshot::Sender<(u64, bool)>,
     },
 
-    VotedReceived {
+    VoteReceived {
         node_id: NodeId,
         term: u64,
         granted: bool,
     },
 
+    AppendEntriesResp {
+        node_id: NodeId,
+        prev_log_index: u64,
+        prev_log_term: u64,
+        resp: tonic::Result<AppendEntriesResp>,
+    },
+
     Tick,
+}
+
+pub struct AppendEntriesResp {
+    pub term: u64,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum Status {
+    Follower,
+    Candidate,
+    Leader,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status::Follower
+    }
+}
+#[derive(Debug, Clone, Copy)]
+pub struct ElectionTimeoutRange {
+    pub low: u64,
+    pub high: u64,
+    pub duration: Duration,
+}
+
+impl Default for ElectionTimeoutRange {
+    fn default() -> Self {
+        Self {
+            low: 150,
+            high: 300,
+            duration: Duration::default(),
+        }
+    }
+}
+
+impl ElectionTimeoutRange {
+    pub fn pick_timeout_value(&mut self) {
+        let mut rng = thread_rng();
+        let timeout = rng.gen_range(self.low..self.high);
+        self.duration = Duration::from_millis(timeout);
+    }
 }
 
 pub struct Persistent {
@@ -59,18 +109,22 @@ impl Persistent {
 }
 
 pub struct Volatile {
+    pub id: NodeId,
+    pub seeds: Vec<Seed>,
     pub status: Status,
     pub voted_for: Option<NodeId>,
-    pub next_index: HashMap<u16, u64>,
-    pub match_index: HashMap<u16, u64>,
+    pub next_index: HashMap<NodeId, u64>,
+    pub match_index: HashMap<NodeId, u64>,
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
     pub tally: HashSet<NodeId>,
 }
 
-impl Default for Volatile {
-    fn default() -> Self {
+impl Volatile {
+    pub fn new(id: NodeId, seeds: Vec<Seed>) -> Self {
         Self {
+            id,
+            seeds,
             status: Status::Follower,
             voted_for: None,
             next_index: Default::default(),
@@ -80,6 +134,23 @@ impl Default for Volatile {
             tally: Default::default(),
         }
     }
+
+    pub fn cluster_size(&self) -> usize {
+        1 + self.seeds.len()
+    }
+
+    pub fn have_we_reached_quorum(&self) -> bool {
+        1 + self.tally.len() > self.cluster_size() / 2
+    }
+
+    pub fn reset(&mut self) {
+        self.voted_for = None;
+        self.tally.clear();
+    }
+
+    pub fn election_timeout(&self) -> bool {
+        self.election_timeout.elapsed() >= self.election_timeout_range.duration
+    }
 }
 
 #[derive(Clone)]
@@ -88,6 +159,10 @@ pub struct Node {
 }
 
 impl Node {
+    pub fn new(sender: mpsc::Sender<Msg>) -> Self {
+        Self { sender }
+    }
+
     pub async fn request_vote(
         &self,
         term: u64,
@@ -149,17 +224,22 @@ impl Node {
     }
 }
 
-pub fn start(persistent: Persistent) -> Node {
-    let (sender, recv) = mpsc::channel();
-
-    thread::spawn(move || state_machine(persistent, recv));
-
-    Node { sender }
+pub fn start(
+    persistent: Persistent,
+    node_id: NodeId,
+    seeds: Vec<Seed>,
+    recv: Receiver<Msg>,
+) -> JoinHandle<()> {
+    thread::spawn(move || state_machine(persistent, node_id, seeds, recv))
 }
 
-fn state_machine(mut persistent: Persistent, mailbox: Receiver<Msg>) {
-    let cluster_size = 3usize;
-    let mut volatile = Volatile::default();
+fn state_machine(
+    mut persistent: Persistent,
+    node_id: NodeId,
+    seeds: Vec<Seed>,
+    mailbox: Receiver<Msg>,
+) {
+    let mut volatile = Volatile::new(node_id, seeds);
 
     loop {
         match mailbox.recv().unwrap() {
@@ -205,24 +285,30 @@ fn state_machine(mut persistent: Persistent, mailbox: Receiver<Msg>) {
                 let _ = resp.send(result);
             }
 
-            Msg::VotedReceived {
+            Msg::VoteReceived {
                 node_id,
                 term,
                 granted,
             } => {
-                on_vote_received(
-                    &mut persistent,
-                    &mut volatile,
-                    cluster_size,
-                    node_id,
-                    term,
-                    granted,
-                );
+                on_vote_received(&mut persistent, &mut volatile, node_id, term, granted);
             }
 
             Msg::Tick => {
                 on_tick(&mut persistent, &mut volatile);
             }
+            Msg::AppendEntriesResp {
+                node_id,
+                prev_log_index,
+                prev_log_term,
+                resp,
+            } => on_append_entries_resp(
+                &mut persistent,
+                &mut volatile,
+                node_id,
+                prev_log_index,
+                prev_log_term,
+                resp,
+            ),
         }
     }
 }
@@ -230,7 +316,6 @@ fn state_machine(mut persistent: Persistent, mailbox: Receiver<Msg>) {
 fn on_vote_received(
     persistent: &mut Persistent,
     volatile: &mut Volatile,
-    cluster_size: usize,
     node_id: NodeId,
     term: u64,
     granted: bool,
@@ -253,9 +338,8 @@ fn on_vote_received(
     if granted {
         volatile.tally.insert(node_id);
 
-        // Means we reached quorum, we can move to Leader status.
-        if volatile.tally.len() > cluster_size / 2 {
-            // state.switch_to_leader();
+        if volatile.have_we_reached_quorum() {
+            switch_to_leader(persistent, volatile);
             return;
         }
     }
@@ -347,4 +431,67 @@ fn on_request_vote(
     }
 }
 
-fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {}
+fn on_append_entries_resp(
+    persistent: &mut Persistent,
+    volatile: &mut Volatile,
+    node_id: NodeId,
+    prev_log_index: u64,
+    prev_log_term: u64,
+    resp: tonic::Result<AppendEntriesResp>,
+) {
+}
+
+fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
+    volatile.status = Status::Leader;
+    volatile.reset();
+
+    let last_log_index = persistent.entries.last_index();
+    // Send heartbeat request to assert dominance.
+    for seed in &volatile.seeds {
+        volatile
+            .next_index
+            .entry(seed.id.clone())
+            .or_insert(last_log_index + 1);
+
+        let prev_log_index = *volatile.match_index.entry(seed.id.clone()).or_insert(0);
+        let prev_log_term = persistent.entries.entry_term(prev_log_index);
+
+        seed.send_heartbeat(
+            persistent.term,
+            volatile.id.clone(),
+            prev_log_index,
+            prev_log_term,
+            persistent.commit_index,
+        );
+    }
+}
+
+fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
+    volatile.status = Status::Candidate;
+    persistent.term += 1;
+    volatile.voted_for = Some(persistent.id.clone());
+
+    let last_log_index = persistent.entries.last_index();
+    let last_log_term = persistent.entries.last_term();
+
+    for seed in &volatile.seeds {
+        seed.request_vote(
+            persistent.term,
+            volatile.id.clone(),
+            last_log_index,
+            last_log_term,
+        );
+    }
+}
+
+fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
+    // Means we are running in single node.
+    if volatile.seeds.is_empty() {
+        return;
+    }
+
+    if volatile.election_timeout() {
+        switch_to_candidate(persistent, volatile);
+        return;
+    }
+}

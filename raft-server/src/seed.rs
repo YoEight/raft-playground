@@ -1,48 +1,44 @@
-use crate::vote_listener::{AppendEntriesResp, IncomingMsg};
+use crate::machine::{AppendEntriesResp, Msg};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
-use tokio::sync::mpsc::UnboundedSender;
+use std::sync::mpsc::Sender;
 use tonic::Request;
-use uuid::Uuid;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
 #[derive(Debug)]
 pub struct Seed {
-    pub mailbox: UnboundedSender<IncomingMsg>,
-    pub host: String,
-    pub port: u16,
-    pub client: Option<RaftClient<HyperClient>>,
+    pub id: NodeId,
+    pub mailbox: Sender<Msg>,
+    pub client: RaftClient<HyperClient>,
 }
 
 impl Seed {
-    pub fn client(&mut self) -> RaftClient<HyperClient> {
-        if let Some(client) = self.client.clone() {
-            client
-        } else {
-            let uri =
-                hyper::Uri::from_maybe_shared(format!("http://{}:{}", "127.0.0.1", self.port))
-                    .unwrap();
+    pub fn new(id: NodeId, mailbox: Sender<Msg>) -> Self {
+        let uri = hyper::Uri::from_maybe_shared(format!("http://{}:{}", id.host.as_str(), id.port))
+            .unwrap();
 
-            let hyper_client = hyper::Client::builder().http2_only(true).build_http();
-            let raft_client = RaftClient::with_origin(hyper_client, uri);
-            self.client = Some(raft_client.clone());
+        let hyper_client = hyper::Client::builder().http2_only(true).build_http();
+        let client = RaftClient::with_origin(hyper_client, uri);
 
-            raft_client
+        Self {
+            id,
+            mailbox,
+            client,
         }
     }
 
     pub fn request_vote(
-        &mut self,
+        &self,
         term: u64,
         candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
     ) {
-        let mut client = self.client();
+        let mut client = self.client.clone();
         let sender = self.mailbox.clone();
-        let port = self.port;
+        let node_id = self.id.clone();
 
         tokio::spawn(async move {
             let resp = client
@@ -55,8 +51,8 @@ impl Seed {
                 .await?
                 .into_inner();
 
-            let _ = sender.send(IncomingMsg::VoteReceived {
-                port,
+            let _ = sender.send(Msg::VoteReceived {
+                node_id,
                 term: resp.term,
                 granted: resp.vote_granted,
             });
@@ -66,7 +62,7 @@ impl Seed {
     }
 
     pub fn send_heartbeat(
-        &mut self,
+        &self,
         term: u64,
         leader_id: NodeId,
         prev_log_index: u64,
@@ -84,7 +80,7 @@ impl Seed {
     }
 
     pub fn send_append_entries(
-        &mut self,
+        &self,
         term: u64,
         leader_id: NodeId,
         prev_log_index: u64,
@@ -92,8 +88,8 @@ impl Seed {
         leader_commit: u64,
         entries: Vec<Entry>,
     ) {
-        let mut client = self.client();
-        let port = self.port;
+        let mut client = self.client.clone();
+        let node_id = self.id.clone();
         let sender = self.mailbox.clone();
         tokio::spawn(async move {
             let resp = client
@@ -114,8 +110,8 @@ impl Seed {
                     }
                 });
 
-            let _ = sender.send(IncomingMsg::AppendEntriesResp {
-                port,
+            let _ = sender.send(Msg::AppendEntriesResp {
+                node_id,
                 prev_log_index,
                 prev_log_term,
                 resp,

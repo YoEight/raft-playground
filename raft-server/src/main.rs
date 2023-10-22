@@ -1,17 +1,15 @@
 mod entry;
-mod env;
 mod id;
 mod machine;
 mod options;
-mod state;
-mod ticking;
-mod vote_listener;
+mod seed;
 
 use crate::machine::{Node, Persistent};
-use crate::state::{NodeState, State};
+use crate::seed::Seed;
 use clap::Parser;
 use raft_common::server::RaftServer;
-use raft_common::{EntriesReq, EntriesResp, VoteReq, VoteResp};
+use raft_common::{EntriesReq, EntriesResp, NodeId, VoteReq, VoteResp};
+use std::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{transport, Request, Response, Status};
 
@@ -85,7 +83,25 @@ async fn main() -> Result<(), transport::Error> {
     println!("Listening on {}", addr);
 
     let persistent = Persistent::load();
-    let node = machine::start(persistent);
+    let mut seeds = Vec::new();
+    let (sender, mailbox) = mpsc::channel();
+
+    let node_id = NodeId {
+        host: "127.0.0.1".to_string(),
+        port: opts.port as u32,
+    };
+
+    for seed_port in opts.seeds {
+        let node_id = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: seed_port as u32,
+        };
+
+        seeds.push(Seed::new(node_id, sender.clone()));
+    }
+
+    let handle = machine::start(persistent, node_id, seeds, mailbox);
+    let node = Node::new(sender);
 
     Server::builder()
         .add_service(RaftServer::new(RaftImpl::new(node)))
