@@ -232,12 +232,6 @@ impl Node {
 
         recv.await.unwrap()
     }
-
-    pub async fn tick(&self) {
-        if self.sender.send(Msg::Tick).is_err() {
-            panic!("Node is down");
-        }
-    }
 }
 
 pub fn start(

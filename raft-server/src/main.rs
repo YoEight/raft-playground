@@ -4,12 +4,13 @@ mod machine;
 mod options;
 mod seed;
 
-use crate::machine::{Node, Persistent};
+use crate::machine::{Msg, Node, Persistent};
 use crate::seed::Seed;
 use clap::Parser;
 use raft_common::server::RaftServer;
 use raft_common::{EntriesReq, EntriesResp, NodeId, VoteReq, VoteResp};
 use std::sync::mpsc;
+use std::time::Duration;
 use tonic::transport::Server;
 use tonic::{transport, Request, Response, Status};
 
@@ -85,6 +86,18 @@ async fn main() -> Result<(), transport::Error> {
     let persistent = Persistent::load();
     let mut seeds = Vec::new();
     let (sender, mailbox) = mpsc::channel();
+    let mut ticking = tokio::time::interval(Duration::from_millis(5));
+    let tick_send = sender.clone();
+
+    tokio::spawn(async move {
+        loop {
+            ticking.tick().await;
+
+            if tick_send.send(Msg::Tick).is_err() {
+                break;
+            }
+        }
+    });
 
     let node_id = NodeId {
         host: "127.0.0.1".to_string(),
@@ -108,5 +121,6 @@ async fn main() -> Result<(), transport::Error> {
         .serve(addr)
         .await?;
 
+    let _ = handle.join();
     Ok(())
 }
