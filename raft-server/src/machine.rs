@@ -463,7 +463,9 @@ pub fn on_append_entries_resp(
 
             let (prev_log_index, prev_log_term) =
                 persistent.entries.get_previous_entry(*next_index);
-            let entries = Vec::new();
+            let entries = persistent
+                .entries
+                .read_entries_from(prev_log_index + 1, 500);
             let seed = volatile.node(&node_id);
 
             seed.send_append_entries(
@@ -480,7 +482,9 @@ pub fn on_append_entries_resp(
     } else {
         // In that case we just keep retrying because it means the follower was not reachable.
         let seed = volatile.node(&node_id);
-        let entries = Vec::new();
+        let entries = persistent
+            .entries
+            .read_entries_from(prev_log_index + 1, 500);
 
         seed.send_append_entries(
             persistent.term,
@@ -519,12 +523,17 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
         let (prev_log_index, prev_log_term) =
             find_known_reference_point(persistent, volatile, seed.id.clone());
 
-        seed.send_heartbeat(
+        let entries = persistent
+            .entries
+            .read_entries_from(prev_log_index + 1, 500);
+
+        seed.send_append_entries(
             persistent.term,
             volatile.id.clone(),
             prev_log_index,
             prev_log_term,
             persistent.commit_index,
+            entries,
         );
     }
 }
@@ -559,12 +568,17 @@ pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
             let (prev_log_index, prev_log_term) =
                 find_known_reference_point(persistent, volatile, seed.id.clone());
 
-            seed.send_heartbeat(
+            let entries = persistent
+                .entries
+                .read_entries_from(prev_log_index + 1, 500);
+
+            seed.send_append_entries(
                 persistent.term,
                 volatile.id.clone(),
                 prev_log_index,
                 prev_log_term,
                 persistent.commit_index,
+                entries,
             );
         }
 

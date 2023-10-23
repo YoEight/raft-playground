@@ -84,4 +84,25 @@ impl Entries {
 
         (index, term)
     }
+
+    pub fn read_entries_from(&self, index: u64, max_count: u64) -> Vec<Entry> {
+        let mut count = 0;
+        let mut batch = Vec::new();
+
+        if self.last_index > index {
+            for entry in &self.inner {
+                if entry.index < index {
+                    continue;
+                }
+
+                batch.push(entry.clone());
+
+                if count >= max_count {
+                    break;
+                }
+            }
+        }
+
+        batch
+    }
 }

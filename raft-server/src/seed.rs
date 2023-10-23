@@ -61,24 +61,6 @@ impl Seed {
         });
     }
 
-    pub fn send_heartbeat(
-        &self,
-        term: u64,
-        leader_id: NodeId,
-        prev_log_index: u64,
-        prev_log_term: u64,
-        leader_commit: u64,
-    ) {
-        self.send_append_entries(
-            term,
-            leader_id,
-            prev_log_index,
-            prev_log_term,
-            leader_commit,
-            vec![],
-        );
-    }
-
     pub fn send_append_entries(
         &self,
         term: u64,
