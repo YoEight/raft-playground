@@ -1,5 +1,6 @@
 use crate::entry::Entries;
 use crate::seed::Seed;
+use bytes::Bytes;
 use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -43,6 +44,16 @@ pub enum Msg {
         prev_log_index: u64,
         prev_log_term: u64,
         resp: tonic::Result<AppendEntriesResp>,
+    },
+
+    AppendStream {
+        stream_id: String,
+        events: Vec<Bytes>,
+        resp: oneshot::Sender<Option<u64>>,
+    },
+
+    ReadStream {
+        stream_id: String,
     },
 
     Tick,

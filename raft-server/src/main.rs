@@ -7,8 +7,9 @@ mod seed;
 use crate::machine::{Msg, Node, Persistent};
 use crate::seed::Seed;
 use clap::Parser;
-use raft_common::server::RaftServer;
-use raft_common::{EntriesReq, EntriesResp, NodeId, VoteReq, VoteResp};
+use futures::stream::BoxStream;
+use raft_common::server::{ApiServer, RaftServer};
+use raft_common::{EntriesReq, EntriesResp, NodeId, ReadResp, VoteReq, VoteResp};
 use std::sync::mpsc;
 use std::time::Duration;
 use tonic::transport::Server;
@@ -76,6 +77,27 @@ impl raft_common::server::Raft for RaftImpl {
     }
 }
 
+struct ApiImpl {}
+
+#[tonic::async_trait]
+impl raft_common::server::Api for ApiImpl {
+    async fn append(
+        &self,
+        request: Request<raft_common::AppendReq>,
+    ) -> Result<Response<raft_common::AppendResp>, Status> {
+        todo!()
+    }
+
+    type ReadStream = BoxStream<'static, Result<ReadResp, Status>>;
+
+    async fn read(
+        &self,
+        request: Request<raft_common::ReadReq>,
+    ) -> Result<Response<Self::ReadStream>, Status> {
+        todo!()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), transport::Error> {
     let opts = options::Options::parse();
@@ -118,6 +140,7 @@ async fn main() -> Result<(), transport::Error> {
 
     Server::builder()
         .add_service(RaftServer::new(RaftImpl::new(node)))
+        .add_service(ApiServer::new(ApiImpl {}))
         .serve(addr)
         .await?;
 

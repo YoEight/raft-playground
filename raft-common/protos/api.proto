@@ -1,0 +1,27 @@
+syntax = "proto3";
+package api;
+
+service Api {
+  rpc Append(AppendReq) returns (AppendResp);
+  rpc Read(ReadReq) returns (stream ReadResp);
+}
+
+message AppendReq {
+  string stream_id = 1;
+  repeated bytes events = 2;
+}
+
+message AppendResp {
+  uint64 position = 1;
+}
+
+message ReadReq {
+  string stream_id = 1;
+}
+
+message ReadResp {
+  string stream_id = 1;
+  uint64 global = 2;
+  uint64 revision = 3;
+  bytes payload = 4;
+}

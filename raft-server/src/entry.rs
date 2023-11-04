@@ -96,6 +96,7 @@ impl Entries {
                 }
 
                 batch.push(entry.clone());
+                count += 1;
 
                 if count >= max_count {
                     break;
