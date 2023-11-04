@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use raft_common::Entry;
 
 #[derive(Clone, Default)]
@@ -106,4 +107,11 @@ impl Entries {
 
         batch
     }
+}
+
+#[derive(Clone)]
+pub struct RecordedEvent {
+    pub stream_id: String,
+    pub revision: u64,
+    pub payload: Bytes,
 }

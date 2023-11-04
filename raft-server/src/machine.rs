@@ -1,4 +1,4 @@
-use crate::entry::Entries;
+use crate::entry::{Entries, RecordedEvent};
 use crate::seed::Seed;
 use bytes::Bytes;
 use raft_common::{Entry, NodeId};
@@ -54,6 +54,7 @@ pub enum Msg {
 
     ReadStream {
         stream_id: String,
+        resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
     },
 
     Tick,
@@ -243,6 +244,36 @@ impl Node {
 
         recv.await.unwrap()
     }
+
+    pub async fn append_stream(&self, stream_id: String, events: Vec<Bytes>) -> Option<u64> {
+        let (resp, recv) = oneshot::channel();
+        if self
+            .sender
+            .send(Msg::AppendStream {
+                stream_id,
+                events,
+                resp,
+            })
+            .is_err()
+        {
+            panic!("Node is down");
+        }
+
+        recv.await.unwrap()
+    }
+
+    pub async fn read_stream(&self, stream_id: String) -> Option<Vec<RecordedEvent>> {
+        let (resp, recv) = oneshot::channel();
+        if self
+            .sender
+            .send(Msg::ReadStream { stream_id, resp })
+            .is_err()
+        {
+            panic!("Node is down");
+        }
+
+        recv.await.unwrap()
+    }
 }
 
 pub fn start(
@@ -330,8 +361,45 @@ fn state_machine(
                 prev_log_term,
                 resp,
             ),
+            Msg::AppendStream {
+                stream_id,
+                events,
+                resp,
+            } => {
+                if volatile.status != Status::Leader {
+                    let _ = resp.send(None);
+                    continue;
+                }
+
+                on_append_stream(&mut persistent, stream_id, resp);
+            }
+
+            Msg::ReadStream { stream_id, resp } => {
+                if volatile.status != Status::Leader {
+                    let _ = resp.send(None);
+                    continue;
+                }
+
+                on_read_stream(&mut persistent, stream_id, resp);
+            }
         }
     }
+}
+
+fn on_read_stream(
+    persistent: &mut Persistent,
+    stream_id: String,
+    resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
+) {
+    todo!()
+}
+
+fn on_append_stream(
+    persistent: &mut Persistent,
+    stream_id: String,
+    resp: oneshot::Sender<Option<u64>>,
+) {
+    todo!()
 }
 
 pub fn on_vote_received(
