@@ -9,7 +9,7 @@ use crate::seed::Seed;
 use clap::Parser;
 use futures::stream::BoxStream;
 use raft_common::server::{ApiServer, RaftServer};
-use raft_common::{EntriesReq, EntriesResp, NodeId, ReadResp, VoteReq, VoteResp};
+use raft_common::{AppendResp, EntriesReq, EntriesResp, NodeId, ReadResp, VoteReq, VoteResp};
 use std::sync::mpsc;
 use std::time::Duration;
 use tonic::transport::Server;
@@ -77,7 +77,16 @@ impl raft_common::server::Raft for RaftImpl {
     }
 }
 
-struct ApiImpl {}
+#[derive(Clone)]
+struct ApiImpl {
+    node: Node,
+}
+
+impl ApiImpl {
+    pub fn new(node: Node) -> Self {
+        Self { node }
+    }
+}
 
 #[tonic::async_trait]
 impl raft_common::server::Api for ApiImpl {
@@ -85,7 +94,18 @@ impl raft_common::server::Api for ApiImpl {
         &self,
         request: Request<raft_common::AppendReq>,
     ) -> Result<Response<raft_common::AppendResp>, Status> {
-        todo!()
+        let request = request.into_inner();
+        if let Some(next_position) = self
+            .node
+            .append_stream(request.stream_id, request.events)
+            .await
+        {
+            Ok(Response::new(AppendResp {
+                position: next_position,
+            }))
+        } else {
+            Err(Status::failed_precondition("not-leader"))
+        }
     }
 
     type ReadStream = BoxStream<'static, Result<ReadResp, Status>>;
@@ -94,7 +114,23 @@ impl raft_common::server::Api for ApiImpl {
         &self,
         request: Request<raft_common::ReadReq>,
     ) -> Result<Response<Self::ReadStream>, Status> {
-        todo!()
+        let request = request.into_inner();
+        if let Some(events) = self.node.read_stream(request.stream_id).await {
+            let streaming = async_stream::stream! {
+                for event in events {
+                    yield Ok(ReadResp {
+                        stream_id: event.stream_id,
+                        global: event.global,
+                        revision: event.revision,
+                        payload: event.payload,
+                    });
+                }
+            };
+
+            Ok(Response::new(Box::pin(streaming)))
+        } else {
+            Err(Status::failed_precondition("not-leader"))
+        }
     }
 }
 
@@ -139,8 +175,8 @@ async fn main() -> Result<(), transport::Error> {
     let node = Node::new(sender);
 
     Server::builder()
-        .add_service(RaftServer::new(RaftImpl::new(node)))
-        .add_service(ApiServer::new(ApiImpl {}))
+        .add_service(RaftServer::new(RaftImpl::new(node.clone())))
+        .add_service(ApiServer::new(ApiImpl::new(node)))
         .serve(addr)
         .await?;
 
