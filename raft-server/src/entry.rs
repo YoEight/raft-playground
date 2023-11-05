@@ -107,6 +107,10 @@ impl Entries {
 
         batch
     }
+
+    pub fn entries(&self) -> &Vec<Entry> {
+        &self.inner
+    }
 }
 
 #[derive(Clone)]

@@ -1,6 +1,6 @@
 use crate::entry::{Entries, RecordedEvent};
 use crate::seed::Seed;
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -371,7 +371,7 @@ fn state_machine(
                     continue;
                 }
 
-                on_append_stream(&mut persistent, stream_id, resp);
+                on_append_stream(&mut persistent, stream_id, events, resp);
             }
 
             Msg::ReadStream { stream_id, resp } => {
@@ -391,15 +391,57 @@ fn on_read_stream(
     stream_id: String,
     resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
 ) {
-    todo!()
+    let mut global = 0;
+    let mut revision = 0;
+    let stream_id_bytes = stream_id.as_bytes();
+    let mut batch = Vec::new();
+
+    for entry in persistent.entries.entries() {
+        let mut payload = entry.payload.clone();
+        let str_len = payload.get_u32_le();
+        let str_bytes = payload.copy_to_bytes(str_len as usize);
+
+        if str_bytes == stream_id_bytes {
+            batch.push(RecordedEvent {
+                stream_id: stream_id.clone(),
+                global,
+                revision,
+                payload,
+            });
+
+            revision += 1;
+        } else {
+            global += 1;
+        }
+    }
+
+    let _ = resp.send(Some(batch));
 }
 
 fn on_append_stream(
     persistent: &mut Persistent,
     stream_id: String,
+    events: Vec<Bytes>,
     resp: oneshot::Sender<Option<u64>>,
 ) {
-    todo!()
+    let stream_id_len = stream_id.chars().count() as u32;
+    let mut index = persistent.entries.last_index();
+    let term = persistent.term;
+    let mut buffer = BytesMut::new();
+    for event in events {
+        buffer.put_u32_le(stream_id_len);
+        buffer.put(stream_id.as_bytes());
+        buffer.put(event);
+        index += 1;
+
+        persistent.entries.add(Entry {
+            index,
+            term,
+            payload: buffer.split().freeze(),
+        });
+    }
+
+    let _ = resp.send(Some(index));
 }
 
 pub fn on_vote_received(
