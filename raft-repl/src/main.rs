@@ -1,3 +1,4 @@
+mod command;
 mod events;
 mod inputs;
 mod state;

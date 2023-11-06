@@ -1,3 +1,4 @@
+use clap::Parser;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction};
@@ -7,6 +8,8 @@ use ratatui::Frame;
 use ratatui_textarea::{Input, TextArea};
 use std::io::StdoutLock;
 use uuid::Uuid;
+
+use crate::command::{Command, Commands};
 
 pub struct Node {
     id: Uuid,
@@ -73,12 +76,20 @@ impl State {
     pub fn on_command(&mut self) -> bool {
         let lines = self.view.shell.lines();
         if !lines.is_empty() {
-            match lines[0].as_str() {
-                "quit" | "exit" => return false,
-                line => {
-                    // TODO - we store anything else as
-                    self.events.push(ListItem::new(line.to_string()));
+            let mut tokens = vec![" "];
+            tokens.extend(lines[0].as_str().split(" "));
+            match Commands::try_parse_from(tokens) {
+                Err(e) => {
+                    // TODO: Find a way to communicate to the UI that the provided command is incorrect.
+                    self.events.push(ListItem::new(e.to_string()));
                 }
+
+                Ok(cmd) => match cmd.command {
+                    Command::Quit | Command::Exit => return false,
+                    Command::Spawn(_args) => {
+                        todo!()
+                    }
+                },
             }
         }
 
