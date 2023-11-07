@@ -5,11 +5,12 @@ use ratatui::prelude::{Alignment, Direction};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
-use ratatui_textarea::{Input, TextArea};
+use ratatui_textarea::{Input, Key, TextArea};
 use std::io::StdoutLock;
 use uuid::Uuid;
 
 use crate::command::{Command, Commands};
+use crate::ui::popup::Popup;
 
 pub struct Node {
     id: Uuid,
@@ -23,6 +24,7 @@ pub struct State {
     events_state: ListState,
     nodes: Vec<Node>,
     nodes_state: TableState,
+    popup: Popup,
 }
 
 impl State {
@@ -33,6 +35,7 @@ impl State {
             events_state: ListState::default(),
             nodes: vec![],
             nodes_state: TableState::default(),
+            popup: Popup::new(),
         }
     }
 
@@ -67,21 +70,34 @@ impl State {
 
         frame.render_stateful_widget(event_list, content_chunks[1], &mut self.events_state);
         frame.render_widget(self.view.shell.widget(), main_chunks[1]);
+        if self.popup.shown {
+            self.popup.draw(frame);
+        }
     }
 
     pub fn on_input(&mut self, input: Input) {
+        if self.popup.shown {
+            return;
+        }
+
         self.view.shell.input(input);
     }
 
     pub fn on_command(&mut self) -> bool {
+        if self.popup.shown {
+            self.popup.shown = false;
+            return true;
+        }
+
         let lines = self.view.shell.lines();
-        if !lines.is_empty() {
+        if !empty_line_cmd(lines) {
             let mut tokens = vec![" "];
             tokens.extend(lines[0].as_str().split(" "));
             match Commands::try_parse_from(tokens) {
                 Err(e) => {
-                    // TODO: Find a way to communicate to the UI that the provided command is incorrect.
-                    self.events.push(ListItem::new(e.to_string()));
+                    self.popup.shown = true;
+                    self.popup.set_title("Command error");
+                    self.popup.set_text(e.to_string());
                 }
 
                 Ok(cmd) => match cmd.command {
@@ -96,6 +112,10 @@ impl State {
         self.view.shell.delete_line_by_head();
         true
     }
+}
+
+fn empty_line_cmd(lines: &[String]) -> bool {
+    lines.is_empty() || lines[0].is_empty()
 }
 
 struct View {

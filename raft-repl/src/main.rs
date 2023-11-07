@@ -2,6 +2,7 @@ mod command;
 mod events;
 mod inputs;
 mod state;
+mod ui;
 
 use crate::events::ReplEvent;
 use crate::inputs::input_process;
