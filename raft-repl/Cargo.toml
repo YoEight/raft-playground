@@ -9,6 +9,7 @@ ratatui = "0.23"
 ratatui-textarea = "0.3"
 crossterm = "0.27"
 eyre = "0.6"
+hyper = "0.14"
 
 [dependencies.uuid]
 version = "1.4"
@@ -17,3 +18,10 @@ features = ["v4"]
 [dependencies.clap]
 version = "4.3"
 features = ["derive"]
+
+[dependencies.tonic]
+version = "0.10"
+features = ["transport"]
+
+[dependencies.raft-common]
+path = "../raft-common"

@@ -1,4 +1,7 @@
 use clap::Parser;
+use hyper::client::HttpConnector;
+use hyper::{Client, Uri};
+use raft_common::client::{ApiClient, RaftClient};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction};
@@ -7,15 +10,15 @@ use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Tab
 use ratatui::Frame;
 use ratatui_textarea::{Input, Key, TextArea};
 use std::io::StdoutLock;
-use uuid::Uuid;
+use tonic::body::BoxBody;
 
-use crate::command::{Command, Commands};
+use crate::command::{Command, Commands, Spawn};
 use crate::ui::popup::Popup;
 
 pub struct Node {
-    id: Uuid,
-    term: u64,
-    state: u64,
+    port: usize,
+    raft_client: RaftClient<Client<HttpConnector, BoxBody>>,
+    api_client: ApiClient<Client<HttpConnector, BoxBody>>,
 }
 
 pub struct State {
@@ -46,7 +49,6 @@ impl State {
         let node_table = Table::new(vec![])
             .header(self.view.node_table_header.clone())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            // .style(Style::default().add_modifier(Modifier::UNDERLINED))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -102,8 +104,12 @@ impl State {
 
                 Ok(cmd) => match cmd.command {
                     Command::Quit | Command::Exit => return false,
-                    Command::Spawn(_args) => {
-                        todo!()
+                    Command::Spawn(args) => {
+                        if let Err(e) = self.spawn_cluster(args) {
+                            self.popup.shown = true;
+                            self.popup.set_title("Error");
+                            self.popup.set_text(e.to_string());
+                        }
                     }
                 },
             }
@@ -111,6 +117,33 @@ impl State {
 
         self.view.shell.delete_line_by_head();
         true
+    }
+
+    pub fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
+        if !self.nodes.is_empty() {
+            eyre::bail!("You already have an active cluster configuration. Shut it down first!");
+        }
+
+        let mut starting_port = 2_113;
+
+        for idx in 0..args.count {
+            let port = starting_port + idx;
+            let mut connector = HttpConnector::new();
+
+            connector.enforce_http(false);
+            let client = hyper::Client::builder().http2_only(true).build(connector);
+            let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port))?;
+            let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
+            let api_client = ApiClient::with_origin(client, uri);
+
+            self.nodes.push(Node {
+                port,
+                raft_client,
+                api_client,
+            });
+        }
+
+        Ok(())
     }
 }
 
