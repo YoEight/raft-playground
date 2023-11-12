@@ -37,13 +37,7 @@ impl Node {
         let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port))?;
         let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
         let api_client = ApiClient::with_origin(client, uri);
-        let local_mailbox = mailbox.clone();
-
-        handle.spawn(async move {
-            let _ = local_mailbox.send(ReplEvent::node_connectivity(idx, Connectivity::Online));
-        });
-
-        Ok(Self {
+        let mut node = Self {
             idx,
             connectivity: Connectivity::Offline,
             handle,
@@ -51,7 +45,11 @@ impl Node {
             port,
             raft_client,
             api_client,
-        })
+        };
+
+        node.start();
+
+        Ok(node)
     }
 
     pub fn port(&self) -> usize {
@@ -68,5 +66,21 @@ impl Node {
 
     pub fn send_event(&self) {
         let api_client = self.api_client.clone();
+    }
+
+    pub fn stop(&mut self) {
+        let mailbox = self.mailbox.clone();
+        let idx = self.idx;
+        self.handle.spawn(async move {
+            let _ = mailbox.send(ReplEvent::node_connectivity(idx, Connectivity::Offline));
+        });
+    }
+
+    pub fn start(&mut self) {
+        let mailbox = self.mailbox.clone();
+        let idx = self.idx;
+        self.handle.spawn(async move {
+            let _ = mailbox.send(ReplEvent::node_connectivity(idx, Connectivity::Online));
+        });
     }
 }

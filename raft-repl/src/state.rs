@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
-use crate::command::{Command, Commands, Spawn};
+use crate::command::{Command, Commands, Spawn, Start, Stop};
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
 use crate::node::{Connectivity, Node};
 use crate::ui::popup::Popup;
@@ -124,17 +124,41 @@ impl State {
         if !empty_line_cmd(lines) {
             let mut tokens = vec![" "];
             tokens.extend(lines[0].as_str().split(" "));
+            let cmd = tokens[1];
             match Commands::try_parse_from(tokens) {
                 Err(e) => {
+                    let title = if cmd == "help" {
+                        "Help"
+                    } else {
+                        "Command error"
+                    };
+
                     self.popup.shown = true;
-                    self.popup.set_title("Command error");
+                    self.popup.set_title(title);
                     self.popup.set_text(e.to_string());
                 }
 
                 Ok(cmd) => match cmd.command {
                     Command::Quit | Command::Exit => return false,
+
                     Command::Spawn(args) => {
                         if let Err(e) = self.spawn_cluster(args) {
+                            self.popup.shown = true;
+                            self.popup.set_title("Error");
+                            self.popup.set_text(e.to_string());
+                        }
+                    }
+
+                    Command::Stop(args) => {
+                        if let Err(e) = self.stop_node(args) {
+                            self.popup.shown = true;
+                            self.popup.set_title("Error");
+                            self.popup.set_text(e.to_string());
+                        }
+                    }
+
+                    Command::Start(args) => {
+                        if let Err(e) = self.start_node(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
                             self.popup.set_text(e.to_string());
@@ -153,8 +177,16 @@ impl State {
     }
 
     pub fn on_node_connectivity_changed(&mut self, event: NodeConnectivityEvent) {
+        let status = match event.connectivity {
+            Connectivity::Online => "online",
+            Connectivity::Offline => "offline",
+        };
+
         self.nodes[event.node].set_connectivity(event.connectivity);
-        self.push_event(Color::default(), format!("Node {} is online", event.node));
+        self.push_event(
+            Color::default(),
+            format!("Node {} is {}", event.node, status),
+        );
     }
 
     fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
@@ -174,6 +206,26 @@ impl State {
 
             self.push_event(Color::default(), format!("Node {} is starting", idx));
         }
+
+        Ok(())
+    }
+
+    fn stop_node(&mut self, args: Stop) -> eyre::Result<()> {
+        if args.node >= self.nodes.len() {
+            eyre::bail!("Node {} doesn't exist", args.node);
+        }
+
+        self.nodes[args.node].stop();
+
+        Ok(())
+    }
+
+    fn start_node(&mut self, args: Start) -> eyre::Result<()> {
+        if args.node >= self.nodes.len() {
+            eyre::bail!("Node {} doesn't exist", args.node);
+        }
+
+        self.nodes[args.node].start();
 
         Ok(())
     }

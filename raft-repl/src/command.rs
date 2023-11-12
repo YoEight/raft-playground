@@ -9,13 +9,32 @@ pub struct Commands {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Exit the application.
     Exit,
+    /// Exit the application.
     Quit,
     Spawn(Spawn),
+    Stop(Stop),
+    Start(Start),
 }
 
 #[derive(Args, Debug, Clone)]
+/// Spawns a cluster of nodes.
 pub struct Spawn {
     #[arg(long)]
     pub count: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+/// Stops a node.
+pub struct Stop {
+    #[arg(long)]
+    pub node: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+/// Starts a node.
+pub struct Start {
+    #[arg(long)]
+    pub node: usize,
 }
