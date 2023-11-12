@@ -10,13 +10,17 @@ use ratatui::Frame;
 use ratatui_textarea::{Input, Key, TextArea};
 use std::io::StdoutLock;
 use std::sync::mpsc;
+use std::time::Instant;
+use tokio::runtime::Runtime;
 
 use crate::command::{Command, Commands, Spawn};
-use crate::events::{Notification, NotificationType, ReplEvent};
-use crate::node::Node;
+use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
+use crate::node::{Connectivity, Node};
 use crate::ui::popup::Popup;
 
 pub struct State {
+    runtime: Runtime,
+    clock: Instant,
     mailbox: mpsc::Sender<ReplEvent>,
     view: View,
     events: Vec<ListItem<'static>>,
@@ -28,8 +32,15 @@ pub struct State {
 
 impl State {
     pub fn new(mailbox: mpsc::Sender<ReplEvent>) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
         Self {
+            runtime,
             mailbox,
+            clock: Instant::now(),
             view: View::new(),
             events: vec![],
             events_state: ListState::default(),
@@ -48,6 +59,15 @@ impl State {
             let mut cells = Vec::new();
 
             cells.push(Cell::from(format!("{} -> localhost:{}", idx, node.port())));
+            match node.connectivity() {
+                Connectivity::Online => {
+                    cells.push(Cell::from("online").style(Style::default().fg(Color::Green)))
+                }
+                Connectivity::Offline => {
+                    cells.push(Cell::from("offline").style(Style::default().fg(Color::Red)))
+                }
+            }
+
             cells.push(Cell::from("0"));
             cells.push(Cell::from("-"));
 
@@ -64,9 +84,10 @@ impl State {
                     .title("Nodes"),
             )
             .widths(&[
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
             ]);
 
         frame.render_stateful_widget(node_table, content_chunks[0], &mut self.nodes_state);
@@ -128,16 +149,15 @@ impl State {
     }
 
     pub fn on_notification(&mut self, event: Notification) {
-        let color = match event.r#type {
-            NotificationType::Positive => Color::default(),
-            NotificationType::Negative => Color::Red,
-        };
-
-        self.events
-            .push(ListItem::new(event.msg).style(Style::default().fg(color)));
+        self.push_notification(event);
     }
 
-    pub fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
+    pub fn on_node_connectivity_changed(&mut self, event: NodeConnectivityEvent) {
+        self.nodes[event.node].set_connectivity(event.connectivity);
+        self.push_event(Color::default(), format!("Node {} is online", event.node));
+    }
+
+    fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
         if !self.nodes.is_empty() {
             eyre::bail!("You already have an active cluster configuration. Shut it down first!");
         }
@@ -145,15 +165,40 @@ impl State {
         let mut starting_port = 2_113;
 
         for idx in 0..args.count {
-            self.nodes
-                .push(Node::new(self.mailbox.clone(), starting_port + idx)?);
+            self.nodes.push(Node::new(
+                idx,
+                self.runtime.handle().clone(),
+                self.mailbox.clone(),
+                starting_port + idx,
+            )?);
 
-            let _ = self
-                .mailbox
-                .send(ReplEvent::msg(format!("Node {} is online", idx)));
+            self.push_event(Color::default(), format!("Node {} is starting", idx));
         }
 
         Ok(())
+    }
+
+    fn push_event(&mut self, color: Color, msg: impl AsRef<str>) {
+        let dur = self.clock.elapsed();
+
+        self.events.push(
+            ListItem::new(format!(
+                "t={}.{}s {}",
+                dur.as_secs(),
+                dur.subsec_millis(),
+                msg.as_ref()
+            ))
+            .style(Style::default().fg(color)),
+        );
+    }
+
+    fn push_notification(&mut self, event: Notification) {
+        let color = match event.r#type {
+            NotificationType::Positive => Color::default(),
+            NotificationType::Negative => Color::Red,
+        };
+
+        self.push_event(color, event.msg);
     }
 }
 
@@ -192,6 +237,7 @@ impl View {
             content_layout,
             node_table_header: Row::new([
                 Cell::from("Id").style(Style::default().add_modifier(Modifier::BOLD)),
+                Cell::from("Connectivity").style(Style::default().add_modifier(Modifier::BOLD)),
                 Cell::from("Term").style(Style::default().add_modifier(Modifier::BOLD)),
                 Cell::from("State").style(Style::default().add_modifier(Modifier::BOLD)),
             ])

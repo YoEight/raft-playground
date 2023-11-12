@@ -82,6 +82,10 @@ fn app_loop(
                 ReplEvent::Notification(event) => {
                     state.on_notification(event);
                 }
+
+                ReplEvent::NodeConnectivityChanged(event) => {
+                    state.on_node_connectivity_changed(event);
+                }
             },
         }
 

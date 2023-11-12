@@ -23,5 +23,9 @@ features = ["derive"]
 version = "0.10"
 features = ["transport"]
 
+[dependencies.tokio]
+version = "1"
+features = ["full"]
+
 [dependencies.raft-common]
 path = "../raft-common"
