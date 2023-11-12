@@ -1,27 +1,23 @@
 use clap::Parser;
 use hyper::client::HttpConnector;
-use hyper::{Client, Uri};
 use raft_common::client::{ApiClient, RaftClient};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
 use ratatui_textarea::{Input, Key, TextArea};
 use std::io::StdoutLock;
-use tonic::body::BoxBody;
+use std::sync::mpsc;
 
 use crate::command::{Command, Commands, Spawn};
+use crate::events::{Notification, NotificationType, ReplEvent};
+use crate::node::Node;
 use crate::ui::popup::Popup;
 
-pub struct Node {
-    port: usize,
-    raft_client: RaftClient<Client<HttpConnector, BoxBody>>,
-    api_client: ApiClient<Client<HttpConnector, BoxBody>>,
-}
-
 pub struct State {
+    mailbox: mpsc::Sender<ReplEvent>,
     view: View,
     events: Vec<ListItem<'static>>,
     events_state: ListState,
@@ -31,8 +27,9 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub fn new(mailbox: mpsc::Sender<ReplEvent>) -> Self {
         Self {
+            mailbox,
             view: View::new(),
             events: vec![],
             events_state: ListState::default(),
@@ -45,8 +42,19 @@ impl State {
     pub fn draw(&mut self, frame: &mut Frame<CrosstermBackend<StdoutLock>>) {
         let main_chunks = self.view.main_layout.split(frame.size());
         let content_chunks = self.view.content_layout.split(main_chunks[0]);
+        let mut rows = Vec::new();
 
-        let node_table = Table::new(vec![])
+        for (idx, node) in self.nodes.iter().enumerate() {
+            let mut cells = Vec::new();
+
+            cells.push(Cell::from(format!("{} -> localhost:{}", idx, node.port())));
+            cells.push(Cell::from("0"));
+            cells.push(Cell::from("-"));
+
+            rows.push(Row::new(cells));
+        }
+
+        let node_table = Table::new(rows)
             .header(self.view.node_table_header.clone())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .block(
@@ -119,6 +127,16 @@ impl State {
         true
     }
 
+    pub fn on_notification(&mut self, event: Notification) {
+        let color = match event.r#type {
+            NotificationType::Positive => Color::default(),
+            NotificationType::Negative => Color::Red,
+        };
+
+        self.events
+            .push(ListItem::new(event.msg).style(Style::default().fg(color)));
+    }
+
     pub fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
         if !self.nodes.is_empty() {
             eyre::bail!("You already have an active cluster configuration. Shut it down first!");
@@ -127,20 +145,12 @@ impl State {
         let mut starting_port = 2_113;
 
         for idx in 0..args.count {
-            let port = starting_port + idx;
-            let mut connector = HttpConnector::new();
+            self.nodes
+                .push(Node::new(self.mailbox.clone(), starting_port + idx)?);
 
-            connector.enforce_http(false);
-            let client = hyper::Client::builder().http2_only(true).build(connector);
-            let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port))?;
-            let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
-            let api_client = ApiClient::with_origin(client, uri);
-
-            self.nodes.push(Node {
-                port,
-                raft_client,
-                api_client,
-            });
+            let _ = self
+                .mailbox
+                .send(ReplEvent::msg(format!("Node {} is online", idx)));
         }
 
         Ok(())
@@ -174,7 +184,7 @@ impl View {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(30)]);
+            .constraints([Constraint::Min(1), Constraint::Length(50)]);
 
         Self {
             shell,

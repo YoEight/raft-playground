@@ -1,6 +1,7 @@
 mod command;
 mod events;
 mod inputs;
+mod node;
 mod state;
 mod ui;
 
@@ -30,7 +31,7 @@ fn main() -> eyre::Result<()> {
     execute!(stdout, EnterAlternateScreen, SetTitle("raft-playground"))?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let err = app_loop(mailbox, &mut terminal);
+    let err = app_loop(sender, mailbox, &mut terminal);
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -43,12 +44,13 @@ fn main() -> eyre::Result<()> {
 }
 
 fn app_loop(
+    sender: mpsc::Sender<ReplEvent>,
     mailbox: mpsc::Receiver<ReplEvent>,
     terminal: &mut Terminal<CrosstermBackend<StdoutLock>>,
 ) -> io::Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
-    let mut state = State::new();
+    let mut state = State::new(sender);
 
     loop {
         terminal.draw(|frame| state.draw(frame))?;
@@ -76,6 +78,10 @@ fn app_loop(
                         state.on_input(input);
                     }
                 },
+
+                ReplEvent::Notification(event) => {
+                    state.on_notification(event);
+                }
             },
         }
 
