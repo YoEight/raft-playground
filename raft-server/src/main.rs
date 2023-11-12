@@ -132,6 +132,10 @@ impl raft_common::server::Api for ApiImpl {
             Err(Status::failed_precondition("not-leader"))
         }
     }
+
+    async fn ping(&self, _request: Request<()>) -> Result<Response<()>, Status> {
+        Ok(Response::new(()))
+    }
 }
 
 #[tokio::main]

@@ -4,7 +4,10 @@ package api;
 service Api {
   rpc Append(AppendReq) returns (AppendResp);
   rpc Read(ReadReq) returns (stream ReadResp);
+  rpc Ping(Empty) returns (Empty);
 }
+
+message Empty {}
 
 message AppendReq {
   string stream_id = 1;

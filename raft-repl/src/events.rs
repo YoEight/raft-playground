@@ -22,6 +22,13 @@ impl ReplEvent {
         })
     }
 
+    pub fn warn(msg: impl AsRef<str>) -> Self {
+        Self::Notification(Notification {
+            msg: msg.as_ref().to_string(),
+            r#type: NotificationType::Warning,
+        })
+    }
+
     pub fn node_connectivity(node: usize, connectivity: Connectivity) -> Self {
         Self::NodeConnectivityChanged(NodeConnectivityEvent { node, connectivity })
     }
@@ -35,6 +42,7 @@ pub struct Notification {
 pub enum NotificationType {
     Positive,
     Negative,
+    Warning,
 }
 
 pub struct NodeConnectivityEvent {

@@ -1,5 +1,5 @@
 use ratatui::backend::Backend;
-use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Rect, Stylize};
+use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
@@ -28,9 +28,9 @@ impl Popup {
 
     pub fn draw<B: Backend>(&self, f: &mut Frame<B>) {
         let size = f.size();
-        let chunks = Layout::default()
-            .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-            .split(size);
+        // let chunks = Layout::default()
+        //     .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        //     .split(size);
 
         let block = Block::default()
             .title(self.title.as_str())

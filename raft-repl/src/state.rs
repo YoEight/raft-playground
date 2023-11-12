@@ -1,13 +1,11 @@
 use clap::Parser;
-use hyper::client::HttpConnector;
-use raft_common::client::{ApiClient, RaftClient};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
-use ratatui_textarea::{Input, Key, TextArea};
+use ratatui_textarea::{Input, TextArea};
 use std::io::StdoutLock;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -139,7 +137,10 @@ impl State {
                 }
 
                 Ok(cmd) => match cmd.command {
-                    Command::Quit | Command::Exit => return false,
+                    Command::Quit | Command::Exit => {
+                        self.cleanup();
+                        return false;
+                    }
 
                     Command::Spawn(args) => {
                         if let Err(e) = self.spawn_cluster(args) {
@@ -194,7 +195,7 @@ impl State {
             eyre::bail!("You already have an active cluster configuration. Shut it down first!");
         }
 
-        let mut starting_port = 2_113;
+        let starting_port = 2_113;
 
         for idx in 0..args.count {
             self.nodes.push(Node::new(
@@ -248,9 +249,16 @@ impl State {
         let color = match event.r#type {
             NotificationType::Positive => Color::default(),
             NotificationType::Negative => Color::Red,
+            NotificationType::Warning => Color::Yellow,
         };
 
         self.push_event(color, event.msg);
+    }
+
+    fn cleanup(&mut self) {
+        while let Some(node) = self.nodes.pop() {
+            node.cleanup();
+        }
     }
 }
 
@@ -281,7 +289,7 @@ impl View {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(50)]);
+            .constraints([Constraint::Percentage(60), Constraint::Length(40)]);
 
         Self {
             shell,
