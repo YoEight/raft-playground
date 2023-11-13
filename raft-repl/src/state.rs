@@ -196,13 +196,25 @@ impl State {
         }
 
         let starting_port = 2_113;
+        let mut all_nodes = Vec::new();
 
         for idx in 0..args.count {
+            all_nodes.push(starting_port + idx);
+        }
+
+        for (idx, port) in all_nodes.iter().copied().enumerate() {
+            let seeds = all_nodes
+                .iter()
+                .copied()
+                .filter(|x| *x != port)
+                .collect::<Vec<_>>();
+
             self.nodes.push(Node::new(
                 idx,
                 self.runtime.handle().clone(),
                 self.mailbox.clone(),
-                starting_port + idx,
+                port,
+                seeds,
             )?);
 
             self.push_event(Color::default(), format!("Node {} is starting", idx));

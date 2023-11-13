@@ -23,9 +23,12 @@ struct Proc {
     process: Child,
 }
 
+const MAX_CONNECTION_ATTEMPTS: usize = 30;
+
 pub struct Node {
     idx: usize,
     port: usize,
+    seeds: Vec<usize>,
     connectivity: Connectivity,
     handle: Handle,
     mailbox: mpsc::Sender<ReplEvent>,
@@ -38,6 +41,7 @@ impl Node {
         handle: Handle,
         mailbox: mpsc::Sender<ReplEvent>,
         port: usize,
+        seeds: Vec<usize>,
     ) -> eyre::Result<Self> {
         let mut connector = HttpConnector::new();
 
@@ -52,6 +56,7 @@ impl Node {
             handle,
             mailbox,
             port,
+            seeds,
             proc: Arc::new(Mutex::new(None)),
         };
 
@@ -97,6 +102,13 @@ impl Node {
         let port = self.port;
         let idx = self.idx;
         let proc_ref = self.proc.clone();
+        let seed_args = self
+            .seeds
+            .iter()
+            .copied()
+            .flat_map(|seed_port| vec!["--seed".to_string(), seed_port.to_string()])
+            .collect::<Vec<_>>();
+
         self.handle.spawn(async move {
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
@@ -105,6 +117,7 @@ impl Node {
                 .arg("--")
                 .arg("--port")
                 .arg(port.to_string())
+                .args(seed_args)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
@@ -130,14 +143,15 @@ impl Node {
                     // We make sure that the node is able to receive requests.
                     let mut attempts = 0;
                     let mut error = None;
-                    while attempts < 30 {
+                    while attempts < MAX_CONNECTION_ATTEMPTS {
                         match api_client.ping(tonic::Request::new(())).await {
                             Err(s) => {
                                 error = Some(s);
                                 let _ = mailbox.send(ReplEvent::warn(format!(
-                                    "Node {} attempt {}/10 failed",
+                                    "Node {} attempt {}/{} failed",
                                     idx,
-                                    attempts + 1
+                                    attempts + 1,
+                                    MAX_CONNECTION_ATTEMPTS,
                                 )));
                             }
                             Ok(_) => {
