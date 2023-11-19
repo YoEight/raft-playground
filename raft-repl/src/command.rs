@@ -16,6 +16,7 @@ pub enum Command {
     Spawn(Spawn),
     Stop(Stop),
     Start(Start),
+    SendEvent(SendEvent),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -35,6 +36,13 @@ pub struct Stop {
 #[derive(Args, Debug, Clone)]
 /// Starts a node.
 pub struct Start {
+    #[arg(long)]
+    pub node: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+/// Sends an event to a node.
+pub struct SendEvent {
     #[arg(long)]
     pub node: usize,
 }

@@ -1,7 +1,10 @@
 use crate::events::ReplEvent;
+use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
+use names::Generator;
 use raft_common::client::{ApiClient, RaftClient};
+use raft_common::AppendReq;
 use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -34,6 +37,7 @@ pub struct Node {
     handle: Handle,
     mailbox: mpsc::Sender<ReplEvent>,
     proc: Arc<Mutex<Option<Proc>>>,
+    name_gen: Generator<'static>,
 }
 
 impl Node {
@@ -51,6 +55,7 @@ impl Node {
         let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port))?;
         let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
         let api_client = ApiClient::with_origin(client, uri);
+        let name_gen = Generator::default();
         let mut node = Self {
             idx,
             connectivity: Connectivity::Offline,
@@ -58,6 +63,7 @@ impl Node {
             mailbox,
             port,
             seeds,
+            name_gen,
             proc: Arc::new(Mutex::new(None)),
         };
 
@@ -85,8 +91,49 @@ impl Node {
         }
     }
 
-    pub fn send_event(&self) {
-        // let api_client = self.api_client.clone();
+    pub fn send_event(&mut self) -> eyre::Result<()> {
+        let prop = self.name_gen.next().unwrap();
+        let value = self.name_gen.next().unwrap();
+        let payload = serde_json::to_vec(&serde_json::json!({
+            prop: value,
+        }))?;
+
+        let idx = self.idx;
+        let proc_ref = self.proc.clone();
+        let mailbox = self.mailbox.clone();
+        self.handle.spawn(async move {
+            let mut proc = proc_ref.lock().await;
+
+            if let Some(proc) = proc.as_mut() {
+                let result = proc
+                    .api_client
+                    .append(Request::new(AppendReq {
+                        stream_id: "foobar".to_string(),
+                        events: vec![Bytes::from(payload)],
+                    }))
+                    .await;
+
+                match result {
+                    Err(status) => {
+                        let _ = mailbox.send(ReplEvent::error(format!(
+                            "Error when sending event to node {}: {}",
+                            idx,
+                            status.message()
+                        )));
+                    }
+                    Ok(resp) => {
+                        let position = resp.into_inner().position;
+                        let _ = mailbox.send(ReplEvent::msg(format!(
+                            "Node {} appended to position {}",
+                            idx, position
+                        )));
+                    }
+                }
+            } else {
+            }
+        });
+
+        Ok(())
     }
 
     pub fn stop(&mut self) {
@@ -214,7 +261,7 @@ fn spawn_healthcheck_process(
     mailbox: mpsc::Sender<ReplEvent>,
     mut api_client: ApiClient<Client<HttpConnector, BoxBody>>,
 ) {
-    handle.block_on(async move {
+    handle.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
 
         loop {

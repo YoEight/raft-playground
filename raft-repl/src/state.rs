@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
-use crate::command::{Command, Commands, Spawn, Start, Stop};
+use crate::command::{Command, Commands, SendEvent, Spawn, Start, Stop};
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
 use crate::node::{Connectivity, Node};
 use crate::ui::popup::Popup;
@@ -165,6 +165,13 @@ impl State {
                             self.popup.set_text(e.to_string());
                         }
                     }
+                    Command::SendEvent(args) => {
+                        if let Err(e) = self.send_event_node(args) {
+                            self.popup.shown = true;
+                            self.popup.set_title("Error");
+                            self.popup.set_text(e.to_string());
+                        }
+                    }
                 },
             }
         }
@@ -239,6 +246,16 @@ impl State {
         }
 
         self.nodes[args.node].start();
+
+        Ok(())
+    }
+
+    fn send_event_node(&mut self, args: SendEvent) -> eyre::Result<()> {
+        if args.node >= self.nodes.len() {
+            eyre::bail!("Node {} doesn't exist", args.node);
+        }
+
+        self.nodes[args.node].send_event()?;
 
         Ok(())
     }
