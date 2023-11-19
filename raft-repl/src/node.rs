@@ -10,8 +10,9 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tonic::body::BoxBody;
+use tonic::Request;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum Connectivity {
     Online,
     Offline,
@@ -75,6 +76,13 @@ impl Node {
 
     pub fn set_connectivity(&mut self, connectivity: Connectivity) {
         self.connectivity = connectivity;
+        if connectivity == Connectivity::Offline {
+            let proc_ref = self.proc.clone();
+            self.handle.block_on(async move {
+                let mut proc = proc_ref.lock().await;
+                *proc = None;
+            });
+        }
     }
 
     pub fn send_event(&self) {
@@ -109,6 +117,7 @@ impl Node {
             .flat_map(|seed_port| vec!["--seed".to_string(), seed_port.to_string()])
             .collect::<Vec<_>>();
 
+        let handle = self.handle.clone();
         self.handle.spawn(async move {
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
@@ -167,13 +176,13 @@ impl Node {
                     if error.is_none() {
                         *proc = Some(Proc {
                             raft_client,
-                            api_client,
+                            api_client: api_client.clone(),
                             process: child,
                         });
 
                         let _ =
                             mailbox.send(ReplEvent::node_connectivity(idx, Connectivity::Online));
-
+                        spawn_healthcheck_process(idx, &handle, mailbox, api_client);
                         return;
                     }
 
@@ -197,4 +206,23 @@ impl Node {
             }
         });
     }
+}
+
+fn spawn_healthcheck_process(
+    node: usize,
+    handle: &Handle,
+    mailbox: mpsc::Sender<ReplEvent>,
+    mut api_client: ApiClient<Client<HttpConnector, BoxBody>>,
+) {
+    handle.block_on(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+
+        loop {
+            ticker.tick().await;
+            if api_client.ping(Request::new(())).await.is_err() {
+                let _ = mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
+                break;
+            }
+        }
+    });
 }
