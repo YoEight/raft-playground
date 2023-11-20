@@ -56,7 +56,18 @@ impl State {
         for (idx, node) in self.nodes.iter().enumerate() {
             let mut cells = Vec::new();
 
-            cells.push(Cell::from(format!("{} -> localhost:{}", idx, node.port())));
+            let suffix = if let Some(true) = node.is_external() {
+                "(ext)"
+            } else {
+                ""
+            };
+
+            cells.push(Cell::from(format!(
+                "{} -> localhost:{} {}",
+                idx,
+                node.port(),
+                suffix
+            )));
             match node.connectivity() {
                 Connectivity::Online => {
                     cells.push(Cell::from("online").style(Style::default().fg(Color::Green)))
@@ -223,8 +234,6 @@ impl State {
                 port,
                 seeds,
             )?);
-
-            self.push_event(Color::default(), format!("Node {} is starting", idx));
         }
 
         Ok(())
@@ -241,6 +250,30 @@ impl State {
     }
 
     fn start_node(&mut self, args: Start) -> eyre::Result<()> {
+        if args.external {
+            let new_node = Node::new_external(
+                args.node,
+                self.runtime.handle().clone(),
+                self.mailbox.clone(),
+                args.port.unwrap_or(2_113),
+            );
+
+            if let Some(node) = self.nodes.get_mut(args.node) {
+                let mut prev = std::mem::replace(node, new_node);
+
+                prev.stop();
+                prev.cleanup();
+            } else {
+                if args.node > self.nodes.len() {
+                    self.nodes.push(new_node);
+                } else {
+                    self.nodes.insert(args.node, new_node);
+                }
+            }
+
+            return Ok(());
+        }
+
         if args.node >= self.nodes.len() {
             eyre::bail!("Node {} doesn't exist", args.node);
         }

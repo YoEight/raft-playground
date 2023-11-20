@@ -38,6 +38,12 @@ pub struct Stop {
 pub struct Start {
     #[arg(long)]
     pub node: usize,
+
+    #[arg(long = "extern")]
+    pub external: bool,
+
+    #[arg(long)]
+    pub port: Option<usize>,
 }
 
 #[derive(Args, Debug, Clone)]
