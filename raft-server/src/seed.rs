@@ -1,8 +1,7 @@
-use crate::machine::{AppendEntriesResp, Msg};
+use crate::machine::{AppendEntriesResp, Msg, NodeClient};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
-use std::sync::mpsc::Sender;
 use tonic::Request;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
@@ -10,12 +9,12 @@ pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 #[derive(Debug, Clone)]
 pub struct Seed {
     pub id: NodeId,
-    pub mailbox: Sender<Msg>,
+    pub mailbox: NodeClient,
     pub client: RaftClient<HyperClient>,
 }
 
 impl Seed {
-    pub fn new(id: NodeId, mailbox: Sender<Msg>) -> Self {
+    pub fn new(id: NodeId, mailbox: NodeClient) -> Self {
         let uri = hyper::Uri::from_maybe_shared(format!("http://{}:{}", id.host.as_str(), id.port))
             .unwrap();
 
@@ -37,7 +36,7 @@ impl Seed {
         last_log_term: u64,
     ) {
         let mut client = self.client.clone();
-        let sender = self.mailbox.clone();
+        let node_client = self.mailbox.clone();
         let node_id = self.id.clone();
 
         tokio::spawn(async move {
@@ -51,11 +50,7 @@ impl Seed {
                 .await?
                 .into_inner();
 
-            let _ = sender.send(Msg::VoteReceived {
-                node_id,
-                term: resp.term,
-                granted: resp.vote_granted,
-            });
+            node_client.vote_received(node_id, resp.term, resp.vote_granted);
 
             Ok::<_, tonic::Status>(())
         });
@@ -72,7 +67,7 @@ impl Seed {
     ) {
         let mut client = self.client.clone();
         let node_id = self.id.clone();
-        let sender = self.mailbox.clone();
+        let node_client = self.mailbox.clone();
         tokio::spawn(async move {
             let resp = client
                 .append_entries(Request::new(EntriesReq {
@@ -92,12 +87,12 @@ impl Seed {
                     }
                 });
 
-            let _ = sender.send(Msg::AppendEntriesResp {
+            node_client.append_entries_response_received(
                 node_id,
                 prev_log_index,
                 prev_log_term,
                 resp,
-            });
+            );
         });
     }
 }

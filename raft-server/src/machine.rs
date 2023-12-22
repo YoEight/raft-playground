@@ -181,12 +181,12 @@ impl Volatile {
     }
 }
 
-#[derive(Clone)]
-pub struct Node {
+#[derive(Clone, Debug)]
+pub struct NodeClient {
     sender: mpsc::Sender<Msg>,
 }
 
-impl Node {
+impl NodeClient {
     pub fn new(sender: mpsc::Sender<Msg>) -> Self {
         Self { sender }
     }
@@ -273,6 +273,33 @@ impl Node {
         }
 
         recv.await.unwrap()
+    }
+
+    pub fn vote_received(&self, node_id: NodeId, term: u64, granted: bool) {
+        let _ = self.sender.send(Msg::VoteReceived {
+            node_id,
+            term,
+            granted,
+        });
+    }
+
+    pub fn append_entries_response_received(
+        &self,
+        node_id: NodeId,
+        prev_log_index: u64,
+        prev_log_term: u64,
+        resp: Result<AppendEntriesResp, tonic::Status>,
+    ) {
+        let _ = self.sender.send(Msg::AppendEntriesResp {
+            node_id,
+            prev_log_index,
+            prev_log_term,
+            resp,
+        });
+    }
+
+    pub fn tick(&self) -> bool {
+        self.sender.send(Msg::Tick).is_ok()
     }
 }
 
