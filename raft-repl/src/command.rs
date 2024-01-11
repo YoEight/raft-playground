@@ -17,6 +17,8 @@ pub enum Command {
     Stop(Stop),
     Start(Start),
     SendEvent(SendEvent),
+    /// Ping a server node.
+    Ping(Ping),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -51,4 +53,24 @@ pub struct Start {
 pub struct SendEvent {
     #[arg(long)]
     pub node: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct Ping {
+    #[command(subcommand)]
+    pub command: PingCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PingCommand {
+    External(PingExternal),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PingExternal {
+    #[arg(long)]
+    pub host: String,
+
+    #[arg(long)]
+    pub port: u16,
 }

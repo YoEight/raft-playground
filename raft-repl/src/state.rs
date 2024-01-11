@@ -1,4 +1,6 @@
 use clap::Parser;
+use hyper::client::HttpConnector;
+use raft_common::client::ApiClient;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction};
@@ -10,8 +12,9 @@ use std::io::StdoutLock;
 use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
+use tonic::Request;
 
-use crate::command::{Command, Commands, SendEvent, Spawn, Start, Stop};
+use crate::command::{Command, Commands, Ping, PingCommand, SendEvent, Spawn, Start, Stop};
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
 use crate::node::{Connectivity, Node};
 use crate::ui::popup::Popup;
@@ -183,6 +186,8 @@ impl State {
                             self.popup.set_text(e.to_string());
                         }
                     }
+
+                    Command::Ping(args) => self.ping_node(args),
                 },
             }
         }
@@ -315,6 +320,40 @@ impl State {
         };
 
         self.push_event(color, event.msg);
+    }
+
+    fn ping_node(&mut self, args: Ping) {
+        match args.command {
+            PingCommand::External(args) => {
+                let mailbox = self.mailbox.clone();
+                self.runtime.spawn(async move {
+                    let mut connector = HttpConnector::new();
+                    connector.enforce_http(false);
+                    let hyper_client = hyper::Client::builder().http2_only(true).build(connector);
+                    let uri = hyper::Uri::from_maybe_shared(format!(
+                        "http://{}:{}",
+                        args.host, args.port
+                    ))
+                    .unwrap();
+                    let mut client = ApiClient::with_origin(hyper_client, uri);
+                    match client.ping(Request::new(())).await {
+                        Err(_) => {
+                            let _ = mailbox.send(ReplEvent::error(format!(
+                                "Ping {}:{} FAILED",
+                                args.host, args.port
+                            )));
+                        }
+
+                        Ok(_) => {
+                            let _ = mailbox.send(ReplEvent::msg(format!(
+                                "Ping {}:{} OK",
+                                args.host, args.port
+                            )));
+                        }
+                    }
+                });
+            }
+        }
     }
 
     fn cleanup(&mut self) {
