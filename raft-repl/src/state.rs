@@ -7,8 +7,9 @@ use ratatui::prelude::{Alignment, Direction};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
-use ratatui_textarea::{Input, TextArea};
+use ratatui_textarea::{CursorMove, Input, Key, TextArea};
 use std::io::StdoutLock;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
@@ -16,10 +17,13 @@ use tonic::Request;
 
 use crate::command::{Command, Commands, Ping, PingCommand, SendEvent, Spawn, Start, Stop};
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
+use crate::history::History;
 use crate::node::{Connectivity, Node};
+use crate::persistence::FileBackend;
 use crate::ui::popup::Popup;
 
 pub struct State {
+    history: History<FileBackend>,
     runtime: Runtime,
     clock: Instant,
     mailbox: mpsc::Sender<ReplEvent>,
@@ -29,16 +33,23 @@ pub struct State {
     nodes: Vec<Node>,
     nodes_state: TableState,
     popup: Popup,
+    temp_prompt: String,
 }
 
 impl State {
-    pub fn new(mailbox: mpsc::Sender<ReplEvent>) -> Self {
+    pub fn new(mailbox: mpsc::Sender<ReplEvent>) -> eyre::Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
 
-        Self {
+        let mut buf = PathBuf::new();
+        let user_dirs = directories::UserDirs::new().unwrap();
+        buf.push(user_dirs.home_dir());
+        buf.push(".raft-repl");
+
+        Ok(Self {
+            history: crate::history::file_backed_history(buf.as_path())?,
             runtime,
             mailbox,
             clock: Instant::now(),
@@ -48,7 +59,8 @@ impl State {
             nodes: vec![],
             nodes_state: TableState::default(),
             popup: Popup::new(),
-        }
+            temp_prompt: String::new(),
+        })
     }
 
     pub fn draw(&mut self, frame: &mut Frame<CrosstermBackend<StdoutLock>>) {
@@ -123,7 +135,35 @@ impl State {
             return;
         }
 
-        self.view.shell.input(input);
+        match input.key {
+            Key::Up => {
+                if self.history.offset_is_head() {
+                    self.temp_prompt = self.view.shell.lines()[0].clone();
+                }
+
+                if let Some(line) = self.history.prev_entry() {
+                    self.view.shell.move_cursor(CursorMove::End);
+                    self.view.shell.delete_line_by_head();
+                    self.view.shell.insert_str(line.as_str());
+                }
+            }
+
+            Key::Down => {
+                if let Some(line) = self.history.next_entry() {
+                    self.view.shell.move_cursor(CursorMove::End);
+                    self.view.shell.delete_line_by_head();
+                    self.view.shell.insert_str(line.as_str());
+                } else if !self.temp_prompt.is_empty() {
+                    self.view.shell.move_cursor(CursorMove::End);
+                    self.view.shell.delete_line_by_head();
+                    self.view.shell.insert_str(self.temp_prompt.as_str());
+                }
+            }
+
+            _ => {
+                self.view.shell.input(input);
+            }
+        }
     }
 
     pub fn on_command(&mut self) -> bool {
@@ -135,6 +175,8 @@ impl State {
         let lines = self.view.shell.lines();
         if !empty_line_cmd(lines) {
             let mut tokens = vec![" "];
+            let cmd_str = lines[0].as_str().to_string();
+            self.history.push(cmd_str).unwrap();
             tokens.extend(lines[0].as_str().split(" "));
             let cmd = tokens[1];
             match Commands::try_parse_from(tokens) {
@@ -195,6 +237,8 @@ impl State {
         self.view.shell.delete_line_by_head();
         true
     }
+
+    pub fn on_previous_history_line(&mut self) {}
 
     pub fn on_notification(&mut self, event: Notification) {
         self.push_notification(event);

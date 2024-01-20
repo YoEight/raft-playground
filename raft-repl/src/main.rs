@@ -1,7 +1,9 @@
 mod command;
 mod events;
+mod history;
 mod inputs;
 mod node;
+mod persistence;
 mod state;
 mod ui;
 
@@ -47,10 +49,10 @@ fn app_loop(
     sender: mpsc::Sender<ReplEvent>,
     mailbox: mpsc::Receiver<ReplEvent>,
     terminal: &mut Terminal<CrosstermBackend<StdoutLock>>,
-) -> io::Result<()> {
+) -> eyre::Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
-    let mut state = State::new(sender);
+    let mut state = State::new(sender)?;
 
     loop {
         terminal.draw(|frame| state.draw(frame))?;
