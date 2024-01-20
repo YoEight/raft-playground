@@ -238,8 +238,6 @@ impl State {
         true
     }
 
-    pub fn on_previous_history_line(&mut self) {}
-
     pub fn on_notification(&mut self, event: Notification) {
         self.push_notification(event);
     }
