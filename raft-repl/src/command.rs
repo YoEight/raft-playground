@@ -16,7 +16,7 @@ pub enum Command {
     Spawn(Spawn),
     Stop(Stop),
     Start(Start),
-    SendEvent(SendEvent),
+    AppendToStream(AppendToStream),
     /// Ping a server node.
     Ping(Ping),
 }
@@ -49,9 +49,9 @@ pub struct Start {
 }
 
 #[derive(Args, Debug, Clone)]
-/// Sends an event to a node.
-pub struct SendEvent {
-    #[arg(long)]
+/// Append a random an event to a random stream to a node.
+pub struct AppendToStream {
+    /// Node index
     pub node: usize,
 }
 
@@ -69,7 +69,7 @@ pub enum PingCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct PingNode {
-    #[arg(long)]
+    /// Node index
     pub node: usize,
 }
 

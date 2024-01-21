@@ -170,51 +170,6 @@ impl Node {
         })
     }
 
-    pub fn send_event(&mut self) -> eyre::Result<()> {
-        let prop = self.name_gen.next().unwrap();
-        let value = self.name_gen.next().unwrap();
-        let payload = serde_json::to_vec(&serde_json::json!({
-            prop: value,
-        }))?;
-
-        let idx = self.idx;
-        let proc_ref = self.proc.clone();
-        let mailbox = self.mailbox.clone();
-        self.handle.spawn(async move {
-            let mut proc = proc_ref.lock().await;
-
-            if let Some(proc) = proc.as_mut() {
-                let result = proc
-                    .api_client
-                    .append(Request::new(AppendReq {
-                        stream_id: "foobar".to_string(),
-                        events: vec![Bytes::from(payload)],
-                    }))
-                    .await;
-
-                match result {
-                    Err(status) => {
-                        let _ = mailbox.send(ReplEvent::error(format!(
-                            "Error when sending event to node {}: {}",
-                            idx,
-                            status.message()
-                        )));
-                    }
-                    Ok(resp) => {
-                        let position = resp.into_inner().position;
-                        let _ = mailbox.send(ReplEvent::msg(format!(
-                            "Node {} appended to position {}",
-                            idx, position
-                        )));
-                    }
-                }
-            } else {
-            }
-        });
-
-        Ok(())
-    }
-
     pub fn stop(&mut self) {
         let proc = self.proc.clone();
         self.handle.spawn(async move {
@@ -304,6 +259,48 @@ impl Node {
             } else {
                 let _ = mailbox.send(ReplEvent::warn(format!(
                     "Pinging node {} is not possible",
+                    node_id
+                )));
+            }
+        });
+    }
+
+    pub fn append_to_stream(&mut self) {
+        let node_id = self.idx;
+        let stream_id = self.name_gen.next().unwrap();
+        let prop_name = self.name_gen.next().unwrap();
+        let value_name = self.name_gen.next().unwrap();
+        let payload = serde_json::json!({
+            prop_name: value_name,
+        });
+        let mailbox = self.mailbox.clone();
+        let proc_ref = self.proc.clone();
+        self.handle.spawn(async move {
+            let mut proc = proc_ref.lock().await;
+
+            if let Some(proc) = proc.as_mut() {
+                if let Err(e) = proc
+                    .api_client
+                    .append(Request::new(AppendReq {
+                        stream_id,
+                        events: vec![Bytes::from(serde_json::to_vec(&payload).unwrap())],
+                    }))
+                    .await
+                {
+                    let _ = mailbox.send(ReplEvent::error(format!(
+                        "node {}: Error when appending: {} ",
+                        node_id,
+                        e.message()
+                    )));
+                } else {
+                    let _ = mailbox.send(ReplEvent::msg(format!(
+                        "node {}: append successful",
+                        node_id
+                    )));
+                }
+            } else {
+                let _ = mailbox.send(ReplEvent::warn(format!(
+                    "Appending node {} is not possible",
                     node_id
                 )));
             }

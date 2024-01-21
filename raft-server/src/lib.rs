@@ -24,7 +24,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(opts: options::Options) -> Self {
+    pub fn new(opts: options::Options) -> eyre::Result<Self> {
         let persistent = Persistent::load();
         let (sender, mailbox) = mpsc::channel();
         let client = NodeClient::new(sender);
@@ -45,14 +45,18 @@ impl Node {
             seeds.push(Seed::new(node_id, client.clone()));
         }
 
+        if (seeds.len() + 1) % 2 == 0 {
+            panic!("Cluster size is an even number which could cause issues for leader election");
+        }
+
         let handle = machine::start(persistent, id.clone(), seeds.clone(), mailbox);
 
-        Self {
+        Ok(Self {
             id,
             seeds,
             client,
             handle,
-        }
+        })
     }
 
     pub fn start(&self) -> task::JoinHandle<Result<(), transport::Error>> {
