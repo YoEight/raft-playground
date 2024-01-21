@@ -116,6 +116,19 @@ impl State {
 
         frame.render_stateful_widget(node_table, content_chunks[0], &mut self.nodes_state);
 
+        let event_view_height = content_chunks[1].height;
+        if let Some(height) = event_view_height.checked_sub(2) {
+            let count = self.events.len();
+
+            if count > height as usize {
+                self.events.reverse();
+                for _ in 0..(count - height as usize) {
+                    self.events.pop();
+                }
+                self.events.reverse();
+            }
+        }
+
         let event_list = List::new(self.events.clone()).block(
             Block::new()
                 .title("Events")
@@ -234,6 +247,7 @@ impl State {
             }
         }
 
+        self.view.shell.move_cursor(CursorMove::End);
         self.view.shell.delete_line_by_head();
         true
     }
@@ -366,6 +380,16 @@ impl State {
 
     fn ping_node(&mut self, args: Ping) {
         match args.command {
+            PingCommand::Node(args) => {
+                if let Some(node) = self.nodes.get(args.node) {
+                    node.ping();
+                } else {
+                    let _ = self
+                        .mailbox
+                        .send(ReplEvent::warn(format!("There is no node {}", args.node)));
+                }
+            }
+
             PingCommand::External(args) => {
                 let mailbox = self.mailbox.clone();
                 self.runtime.spawn(async move {

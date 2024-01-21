@@ -288,6 +288,28 @@ impl Node {
         });
     }
 
+    pub fn ping(&self) {
+        let node_id = self.idx;
+        let mailbox = self.mailbox.clone();
+        let proc_ref = self.proc.clone();
+        self.handle.spawn(async move {
+            let mut proc = proc_ref.lock().await;
+
+            if let Some(proc) = proc.as_mut() {
+                if proc.api_client.ping(Request::new(())).await.is_err() {
+                    let _ = mailbox.send(ReplEvent::error(format!("Ping node {} FAILED", node_id)));
+                } else {
+                    let _ = mailbox.send(ReplEvent::msg(format!("Ping node {} ok", node_id)));
+                }
+            } else {
+                let _ = mailbox.send(ReplEvent::warn(format!(
+                    "Pinging node {} is not possible",
+                    node_id
+                )));
+            }
+        });
+    }
+
     pub fn cleanup(self) {
         self.handle.block_on(async move {
             let mut proc = self.proc.lock().await;

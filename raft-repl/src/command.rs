@@ -63,7 +63,14 @@ pub struct Ping {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum PingCommand {
+    Node(PingNode),
     External(PingExternal),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PingNode {
+    #[arg(long)]
+    pub node: usize,
 }
 
 #[derive(Args, Debug, Clone)]
