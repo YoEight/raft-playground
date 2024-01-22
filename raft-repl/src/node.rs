@@ -1,3 +1,4 @@
+use crate::command::{AppendToStream, ReadStream};
 use crate::events::ReplEvent;
 use bytes::Bytes;
 use hyper::client::HttpConnector;
@@ -265,9 +266,13 @@ impl Node {
         });
     }
 
-    pub fn append_to_stream(&mut self) {
+    pub fn append_to_stream(&mut self, args: AppendToStream) {
         let node_id = self.idx;
-        let stream_id = self.name_gen.next().unwrap();
+        let stream_id = if let Some(name) = args.stream {
+            name
+        } else {
+            self.name_gen.next().unwrap()
+        };
         let prop_name = self.name_gen.next().unwrap();
         let value_name = self.name_gen.next().unwrap();
         let payload = serde_json::json!({
@@ -306,6 +311,8 @@ impl Node {
             }
         });
     }
+
+    pub fn read_stream(&mut self, args: ReadStream) {}
 
     pub fn cleanup(self) {
         self.handle.block_on(async move {

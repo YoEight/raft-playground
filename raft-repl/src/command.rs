@@ -17,6 +17,7 @@ pub enum Command {
     Stop(Stop),
     Start(Start),
     AppendToStream(AppendToStream),
+    ReadStream(ReadStream),
     /// Ping a server node.
     Ping(Ping),
 }
@@ -53,6 +54,19 @@ pub struct Start {
 pub struct AppendToStream {
     /// Node index
     pub node: usize,
+
+    #[arg(long)]
+    pub stream: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+/// Read a stream from a node.
+pub struct ReadStream {
+    /// Node index
+    pub node: usize,
+
+    #[arg(long)]
+    pub stream: String,
 }
 
 #[derive(Args, Debug, Clone)]

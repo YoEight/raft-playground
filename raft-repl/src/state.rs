@@ -15,7 +15,9 @@ use std::time::Instant;
 use tokio::runtime::Runtime;
 use tonic::Request;
 
-use crate::command::{AppendToStream, Command, Commands, Ping, PingCommand, Spawn, Start, Stop};
+use crate::command::{
+    AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Spawn, Start, Stop,
+};
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
 use crate::history::History;
 use crate::node::{Connectivity, Node};
@@ -234,8 +236,17 @@ impl State {
                             self.popup.set_text(e.to_string());
                         }
                     }
+
                     Command::AppendToStream(args) => {
                         if let Err(e) = self.append_to_stream(args) {
+                            self.popup.shown = true;
+                            self.popup.set_title("Error");
+                            self.popup.set_text(e.to_string());
+                        }
+                    }
+
+                    Command::ReadStream(args) => {
+                        if let Err(e) = self.read_stream(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
                             self.popup.set_text(e.to_string());
@@ -349,7 +360,17 @@ impl State {
             eyre::bail!("Node {} doesn't exist", args.node);
         }
 
-        self.nodes[args.node].append_to_stream();
+        self.nodes[args.node].append_to_stream(args);
+
+        Ok(())
+    }
+
+    fn read_stream(&mut self, args: ReadStream) -> eyre::Result<()> {
+        if args.node >= self.nodes.len() {
+            eyre::bail!("Node {} doesn't exist", args.node);
+        }
+
+        self.nodes[args.node].read_stream(args);
 
         Ok(())
     }
