@@ -137,10 +137,17 @@ pub struct Volatile {
 
 impl Volatile {
     pub fn new(id: NodeId, seeds: Vec<Seed>) -> Self {
+        // If the seed list is empty it means we are in a single node configuration.
+        let status = if seeds.is_empty() {
+            Status::Leader
+        } else {
+            Status::Follower
+        };
+
         Self {
             id,
             seeds,
-            status: Status::Follower,
+            status,
             voted_for: None,
             next_index: Default::default(),
             match_index: Default::default(),
