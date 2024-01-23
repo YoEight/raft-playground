@@ -18,7 +18,7 @@ use tonic::Request;
 use crate::command::{
     AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Spawn, Start, Stop,
 };
-use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent};
+use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent, StreamRead};
 use crate::history::History;
 use crate::node::{Connectivity, Node};
 use crate::persistence::FileBackend;
@@ -278,6 +278,10 @@ impl State {
             Color::default(),
             format!("Node {} is {}", event.node, status),
         );
+    }
+
+    pub fn on_node_stream_read(&mut self, event: StreamRead) {
+        // TODO - Implement popup with scrolling capabilities to read stream result.
     }
 
     fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {

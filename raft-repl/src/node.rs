@@ -1,11 +1,12 @@
 use crate::command::{AppendToStream, ReadStream};
+use crate::data::RecordedEvent;
 use crate::events::ReplEvent;
 use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
 use names::Generator;
 use raft_common::client::{ApiClient, RaftClient};
-use raft_common::AppendReq;
+use raft_common::{AppendReq, ReadReq};
 use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -13,6 +14,7 @@ use tokio::process::{Child, Command};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tonic::body::BoxBody;
+use tonic::codegen::tokio_stream::StreamExt;
 use tonic::Request;
 use uuid::Uuid;
 
@@ -312,7 +314,63 @@ impl Node {
         });
     }
 
-    pub fn read_stream(&mut self, args: ReadStream) {}
+    pub fn read_stream(&mut self, args: ReadStream) {
+        let node_id = self.idx;
+        let mailbox = self.mailbox.clone();
+        let proc_ref = self.proc.clone();
+
+        self.handle.spawn(async move {
+            let mut proc = proc_ref.lock().await;
+
+            if let Some(proc) = proc.as_mut() {
+                match proc
+                    .api_client
+                    .read(Request::new(ReadReq {
+                        stream_id: args.stream.clone(),
+                    }))
+                    .await
+                {
+                    Err(e) => {
+                        let _ = mailbox.send(ReplEvent::error(format!(
+                            "Reading stream '{}' from node {} caused an error: {}",
+                            args.stream,
+                            args.node,
+                            e.message()
+                        )));
+                    }
+                    Ok(stream) => {
+                        let mut events = Vec::new();
+                        let mut stream = stream.into_inner();
+
+                        loop {
+                            match stream.try_next().await {
+                                Err(e) => {}
+                                Ok(resp) => {
+                                    if let Some(resp) = resp {
+                                        events.push(RecordedEvent {
+                                            stream_id: resp.stream_id,
+                                            global: resp.global,
+                                            revision: resp.revision,
+                                            payload: resp.payload,
+                                        });
+                                        continue;
+                                    }
+
+                                    break;
+                                }
+                            }
+                        }
+
+                        let _ = mailbox.send(ReplEvent::msg(format!(
+                            "Reading stream '{}' from node {} was successful",
+                            args.stream, node_id
+                        )));
+                        let _ = mailbox.send(ReplEvent::stream_read(node_id, args.stream, events));
+                    }
+                }
+            }
+        });
+    }
 
     pub fn cleanup(self) {
         self.handle.block_on(async move {

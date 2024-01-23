@@ -1,3 +1,4 @@
+use crate::data::RecordedEvent;
 use crate::node::Connectivity;
 use ratatui_textarea::Input;
 
@@ -5,6 +6,7 @@ pub enum ReplEvent {
     Input(Input),
     Notification(Notification),
     NodeConnectivityChanged(NodeConnectivityEvent),
+    StreamRead(StreamRead),
 }
 
 impl ReplEvent {
@@ -32,6 +34,14 @@ impl ReplEvent {
     pub fn node_connectivity(node: usize, connectivity: Connectivity) -> Self {
         Self::NodeConnectivityChanged(NodeConnectivityEvent { node, connectivity })
     }
+
+    pub fn stream_read(node: usize, stream: String, events: Vec<RecordedEvent>) -> Self {
+        Self::StreamRead(StreamRead {
+            node,
+            stream,
+            events,
+        })
+    }
 }
 
 pub struct Notification {
@@ -48,4 +58,10 @@ pub enum NotificationType {
 pub struct NodeConnectivityEvent {
     pub node: usize,
     pub connectivity: Connectivity,
+}
+
+pub struct StreamRead {
+    pub node: usize,
+    pub stream: String,
+    pub events: Vec<RecordedEvent>,
 }

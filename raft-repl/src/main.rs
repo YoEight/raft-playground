@@ -1,4 +1,5 @@
 mod command;
+mod data;
 mod events;
 mod history;
 mod inputs;
@@ -87,6 +88,10 @@ fn app_loop(
 
                 ReplEvent::NodeConnectivityChanged(event) => {
                     state.on_node_connectivity_changed(event);
+                }
+
+                ReplEvent::StreamRead(event) => {
+                    state.on_node_stream_read(event);
                 }
             },
         }
