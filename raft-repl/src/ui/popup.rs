@@ -1,11 +1,19 @@
 use ratatui::backend::Backend;
-use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Margin, Rect};
+use ratatui::widgets::{
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 use ratatui::Frame;
+use ratatui_textarea::{Input, Key};
+use std::cmp::max;
 
 pub struct Popup {
     title: String,
     text: String,
+    scroll_vert: u16,
+    scroll_horiz: u16,
+    content_length_vert: u16,
+    content_length_horiz: u16,
     pub shown: bool,
 }
 
@@ -13,6 +21,10 @@ impl Popup {
     pub fn new() -> Self {
         Self {
             shown: false,
+            scroll_vert: 0,
+            scroll_horiz: 0,
+            content_length_vert: 0,
+            content_length_horiz: 0,
             text: Default::default(),
             title: Default::default(),
         }
@@ -23,10 +35,15 @@ impl Popup {
     }
 
     pub fn set_text(&mut self, text: impl AsRef<str>) {
-        self.text = text.as_ref().to_string();
+        self.text = text.as_ref().trim().to_string();
+        self.content_length_vert = self.text.lines().count() as u16;
+
+        for line in self.text.lines() {
+            self.content_length_horiz = max(self.content_length_horiz, line.chars().count() as u16);
+        }
     }
 
-    pub fn draw<B: Backend>(&self, f: &mut Frame<B>) {
+    pub fn draw<B: Backend>(&mut self, f: &mut Frame<B>) {
         let size = f.size();
         // let chunks = Layout::default()
         //     .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
@@ -46,11 +63,77 @@ impl Popup {
             .direction(Direction::Horizontal)
             .split(area)[0];
 
+        if self.content_length_vert <= rect.height {
+            self.scroll_vert = 0;
+        }
+
+        if self.content_length_horiz <= rect.width {
+            self.scroll_horiz = 0;
+        }
+
         let paragraph = Paragraph::new(self.text.as_str())
             .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true });
+            .scroll((self.scroll_vert, self.scroll_horiz));
+
+        let scrollbar_vert = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .symbols(ratatui::symbols::scrollbar::VERTICAL);
+        let scrollbar_horiz = Scrollbar::default()
+            .orientation(ScrollbarOrientation::HorizontalBottom)
+            .symbols(ratatui::symbols::scrollbar::HORIZONTAL);
 
         f.render_widget(paragraph, rect);
+
+        let mut state_vert = ScrollbarState::default()
+            .content_length(self.content_length_vert)
+            .position(self.scroll_vert);
+
+        let mut state_horiz = ScrollbarState::default()
+            .content_length(self.content_length_horiz)
+            .position(self.scroll_horiz);
+
+        f.render_stateful_widget(
+            scrollbar_vert,
+            area.inner(&Margin {
+                horizontal: 0,
+                vertical: 1,
+            }),
+            &mut state_vert,
+        );
+
+        f.render_stateful_widget(
+            scrollbar_horiz,
+            area.inner(&Margin {
+                horizontal: 1,
+                vertical: 0,
+            }),
+            &mut state_horiz,
+        );
+    }
+
+    pub fn on_input(&mut self, input: Input) {
+        match input.key {
+            Key::Up => self.scroll_vert = self.scroll_vert.saturating_sub(1),
+            Key::PageDown => self.scroll_vert = self.content_length_vert.saturating_sub(1),
+            Key::PageUp => self.scroll_vert = 0,
+            Key::Left => self.scroll_horiz = self.scroll_horiz.saturating_sub(1),
+
+            Key::Right => {
+                self.scroll_horiz = self
+                    .scroll_horiz
+                    .saturating_add(1)
+                    .clamp(0, self.content_length_horiz.saturating_sub(1));
+            }
+
+            Key::Down => {
+                self.scroll_vert = self
+                    .scroll_vert
+                    .saturating_add(1)
+                    .clamp(0, self.content_length_vert.saturating_sub(1))
+            }
+
+            _ => {}
+        }
     }
 }
 

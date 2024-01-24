@@ -147,6 +147,7 @@ impl State {
 
     pub fn on_input(&mut self, input: Input) {
         if self.popup.shown {
+            self.popup.on_input(input);
             return;
         }
 
