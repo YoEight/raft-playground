@@ -1,5 +1,6 @@
 use ratatui::backend::Backend;
 use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Margin, Rect};
+use ratatui::text::Text;
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
@@ -9,7 +10,7 @@ use std::cmp::max;
 
 pub struct Popup {
     title: String,
-    text: String,
+    text: Text<'static>,
     scroll_vert: u16,
     scroll_horiz: u16,
     content_length_vert: u16,
@@ -34,13 +35,12 @@ impl Popup {
         self.title = title.as_ref().to_string();
     }
 
-    pub fn set_text(&mut self, text: impl AsRef<str>) {
-        self.text = text.as_ref().trim().to_string();
-        self.content_length_vert = self.text.lines().count() as u16;
-
-        for line in self.text.lines() {
-            self.content_length_horiz = max(self.content_length_horiz, line.chars().count() as u16);
-        }
+    pub fn set_text(&mut self, text: Text<'static>) {
+        self.text = text;
+        self.content_length_horiz = self.text.width() as u16;
+        self.content_length_vert = self.text.height() as u16;
+        self.scroll_horiz = 0;
+        self.scroll_vert = 0;
     }
 
     pub fn draw<B: Backend>(&mut self, f: &mut Frame<B>) {
@@ -63,7 +63,7 @@ impl Popup {
             .direction(Direction::Horizontal)
             .split(area)[0];
 
-        let paragraph = Paragraph::new(self.text.as_str())
+        let paragraph = Paragraph::new(self.text.clone())
             .alignment(Alignment::Left)
             .scroll((self.scroll_vert, self.scroll_horiz));
 

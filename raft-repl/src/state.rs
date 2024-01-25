@@ -3,7 +3,7 @@ use hyper::client::HttpConnector;
 use raft_common::client::ApiClient;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::prelude::{Alignment, Direction};
+use ratatui::prelude::{Alignment, Direction, Text};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
@@ -205,7 +205,7 @@ impl State {
 
                     self.popup.shown = true;
                     self.popup.set_title(title);
-                    self.popup.set_text(e.to_string());
+                    self.popup.set_text(to_text(e.to_string()));
                 }
 
                 Ok(cmd) => match cmd.command {
@@ -218,7 +218,7 @@ impl State {
                         if let Err(e) = self.spawn_cluster(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
-                            self.popup.set_text(e.to_string());
+                            self.popup.set_text(to_text(e.to_string()));
                         }
                     }
 
@@ -226,7 +226,7 @@ impl State {
                         if let Err(e) = self.stop_node(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
-                            self.popup.set_text(e.to_string());
+                            self.popup.set_text(to_text(e.to_string()));
                         }
                     }
 
@@ -234,7 +234,7 @@ impl State {
                         if let Err(e) = self.start_node(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
-                            self.popup.set_text(e.to_string());
+                            self.popup.set_text(to_text(e.to_string()));
                         }
                     }
 
@@ -242,7 +242,7 @@ impl State {
                         if let Err(e) = self.append_to_stream(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
-                            self.popup.set_text(e.to_string());
+                            self.popup.set_text(to_text(e.to_string()));
                         }
                     }
 
@@ -250,7 +250,7 @@ impl State {
                         if let Err(e) = self.read_stream(args) {
                             self.popup.shown = true;
                             self.popup.set_title("Error");
-                            self.popup.set_text(e.to_string());
+                            self.popup.set_text(to_text(e.to_string()));
                         }
                     }
 
@@ -457,6 +457,10 @@ impl State {
 
 fn empty_line_cmd(lines: &[String]) -> bool {
     lines.is_empty() || lines[0].is_empty()
+}
+
+fn to_text(content: String) -> Text<'static> {
+    Text::from(content)
 }
 
 struct View {
