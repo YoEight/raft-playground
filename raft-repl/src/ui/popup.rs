@@ -63,52 +63,52 @@ impl Popup {
             .direction(Direction::Horizontal)
             .split(area)[0];
 
-        if self.content_length_vert <= rect.height {
-            self.scroll_vert = 0;
-        }
-
-        if self.content_length_horiz <= rect.width {
-            self.scroll_horiz = 0;
-        }
-
         let paragraph = Paragraph::new(self.text.as_str())
             .alignment(Alignment::Left)
             .scroll((self.scroll_vert, self.scroll_horiz));
 
-        let scrollbar_vert = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .symbols(ratatui::symbols::scrollbar::VERTICAL);
-        let scrollbar_horiz = Scrollbar::default()
-            .orientation(ScrollbarOrientation::HorizontalBottom)
-            .symbols(ratatui::symbols::scrollbar::HORIZONTAL);
-
         f.render_widget(paragraph, rect);
+        if self.content_length_vert > rect.height {
+            let scrollbar_vert = Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .symbols(ratatui::symbols::scrollbar::VERTICAL);
 
-        let mut state_vert = ScrollbarState::default()
-            .content_length(self.content_length_vert)
-            .position(self.scroll_vert);
+            let mut state_vert = ScrollbarState::default()
+                .content_length(self.content_length_vert)
+                .position(self.scroll_vert);
 
-        let mut state_horiz = ScrollbarState::default()
-            .content_length(self.content_length_horiz)
-            .position(self.scroll_horiz);
+            f.render_stateful_widget(
+                scrollbar_vert,
+                area.inner(&Margin {
+                    horizontal: 0,
+                    vertical: 1,
+                }),
+                &mut state_vert,
+            );
+        } else {
+            self.scroll_vert = 0;
+        }
 
-        f.render_stateful_widget(
-            scrollbar_vert,
-            area.inner(&Margin {
-                horizontal: 0,
-                vertical: 1,
-            }),
-            &mut state_vert,
-        );
+        if self.content_length_horiz > rect.width {
+            let scrollbar_horiz = Scrollbar::default()
+                .orientation(ScrollbarOrientation::HorizontalBottom)
+                .symbols(ratatui::symbols::scrollbar::HORIZONTAL);
 
-        f.render_stateful_widget(
-            scrollbar_horiz,
-            area.inner(&Margin {
-                horizontal: 1,
-                vertical: 0,
-            }),
-            &mut state_horiz,
-        );
+            let mut state_horiz = ScrollbarState::default()
+                .content_length(self.content_length_horiz)
+                .position(self.scroll_horiz);
+
+            f.render_stateful_widget(
+                scrollbar_horiz,
+                area.inner(&Margin {
+                    horizontal: 1,
+                    vertical: 0,
+                }),
+                &mut state_horiz,
+            );
+        } else {
+            self.scroll_horiz = 0;
+        }
     }
 
     pub fn on_input(&mut self, input: Input) {
