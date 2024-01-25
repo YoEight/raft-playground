@@ -92,7 +92,8 @@ impl Popup {
         if self.content_length_horiz > rect.width {
             let scrollbar_horiz = Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
-                .symbols(ratatui::symbols::scrollbar::HORIZONTAL);
+                .symbols(ratatui::symbols::scrollbar::HORIZONTAL)
+                .thumb_symbol("■");
 
             let mut state_horiz = ScrollbarState::default()
                 .content_length(self.content_length_horiz)
