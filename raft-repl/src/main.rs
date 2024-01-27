@@ -69,18 +69,11 @@ fn app_loop(
             }
 
             Ok(event) => match event {
-                ReplEvent::Input(input) => match input {
-                    Input {
-                        key: Key::Enter, ..
-                    } => {
-                        if !state.on_command() {
-                            break;
-                        }
+                ReplEvent::Input(input) => {
+                    if !state.on_input(input) {
+                        break;
                     }
-                    input => {
-                        state.on_input(input);
-                    }
-                },
+                }
 
                 ReplEvent::Notification(event) => {
                     state.on_notification(event);

@@ -3,11 +3,12 @@ use hyper::client::HttpConnector;
 use raft_common::client::ApiClient;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::prelude::{Alignment, Direction, Text};
+use ratatui::prelude::{Alignment, Direction, Line, Span, Text};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
 use ratatui_textarea::{CursorMove, Input, Key, TextArea};
+use serde_json::Value;
 use std::io::StdoutLock;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -145,10 +146,10 @@ impl State {
         }
     }
 
-    pub fn on_input(&mut self, input: Input) {
+    pub fn on_input(&mut self, input: Input) -> bool {
         if self.popup.shown {
             self.popup.on_input(input);
-            return;
+            return true;
         }
 
         match input.key {
@@ -176,18 +177,19 @@ impl State {
                 }
             }
 
+            Key::Enter => {
+                return self.on_command();
+            }
+
             _ => {
                 self.view.shell.input(input);
             }
         }
+
+        true
     }
 
     pub fn on_command(&mut self) -> bool {
-        if self.popup.shown {
-            self.popup.shown = false;
-            return true;
-        }
-
         let lines = self.view.shell.lines();
         if !empty_line_cmd(lines) {
             let mut tokens = vec![" "];
@@ -282,7 +284,13 @@ impl State {
     }
 
     pub fn on_node_stream_read(&mut self, event: StreamRead) {
-        // TODO - Implement popup with scrolling capabilities to read stream result.
+        self.popup.set_title(format!(
+            "Reading stream '{}' from node {}",
+            event.stream, event.node
+        ));
+
+        self.popup.set_text(serialize_records(event));
+        self.popup.shown = true;
     }
 
     fn spawn_cluster(&mut self, args: Spawn) -> eyre::Result<()> {
@@ -461,6 +469,35 @@ fn empty_line_cmd(lines: &[String]) -> bool {
 
 fn to_text(content: String) -> Text<'static> {
     Text::from(content)
+}
+
+fn serialize_records(msg: StreamRead) -> Text<'static> {
+    let mut lines = vec![];
+
+    for event in msg.events {
+        let payload = serde_json::from_slice::<Value>(event.payload.as_ref()).unwrap();
+        let payload = serde_json::to_string_pretty(&payload).unwrap();
+        let payload = Text::from(payload);
+
+        lines.push(Line::from(vec![
+            Span::styled("Global:", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(event.global.to_string()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Revision:", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(event.revision.to_string()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Stream Id:", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(event.stream_id),
+        ]));
+        lines.push(Line::default());
+        lines.extend(payload);
+        lines.push(Line::default());
+        lines.push(Line::default());
+    }
+
+    Text::from(lines)
 }
 
 struct View {

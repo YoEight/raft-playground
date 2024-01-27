@@ -133,6 +133,10 @@ impl Popup {
                     .clamp(0, self.content_length_vert.saturating_sub(1))
             }
 
+            Key::Char('q') | Key::Enter => {
+                self.shown = false;
+            }
+
             _ => {}
         }
     }
