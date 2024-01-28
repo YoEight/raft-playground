@@ -5,6 +5,7 @@ use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -57,6 +58,10 @@ pub enum Msg {
         resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
     },
 
+    Status {
+        resp: oneshot::Sender<StatusResp>,
+    },
+
     Tick,
 }
 
@@ -65,11 +70,30 @@ pub struct AppendEntriesResp {
     pub success: bool,
 }
 
+pub struct StatusResp {
+    pub id: NodeId,
+    pub status: Status,
+    pub leader_id: Option<NodeId>,
+    pub term: u64,
+    pub log_index: u64,
+    pub global: u64,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Status {
     Follower,
     Candidate,
     Leader,
+}
+
+impl Display for Status {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Status::Follower => write!(f, "follower"),
+            Status::Candidate => write!(f, "candidate"),
+            Status::Leader => write!(f, "leader"),
+        }
+    }
 }
 
 impl Default for Status {
@@ -124,6 +148,7 @@ impl Persistent {
 
 pub struct Volatile {
     pub id: NodeId,
+    pub leader: Option<NodeId>,
     pub seeds: Vec<Seed>,
     pub status: Status,
     pub voted_for: Option<NodeId>,
@@ -148,6 +173,7 @@ impl Volatile {
             id,
             seeds,
             status,
+            leader: None,
             voted_for: None,
             next_index: Default::default(),
             match_index: Default::default(),
@@ -282,6 +308,16 @@ impl NodeClient {
         recv.await.unwrap()
     }
 
+    pub async fn status(&self) -> StatusResp {
+        let (resp, recv) = oneshot::channel();
+
+        if self.sender.send(Msg::Status { resp }).is_err() {
+            panic!("Node is down");
+        }
+
+        recv.await.unwrap()
+    }
+
     pub fn vote_received(&self, node_id: NodeId, term: u64, granted: bool) {
         let _ = self.sender.send(Msg::VoteReceived {
             node_id,
@@ -382,6 +418,7 @@ fn state_machine(
             Msg::Tick => {
                 on_tick(&mut persistent, &mut volatile);
             }
+
             Msg::AppendEntriesResp {
                 node_id,
                 prev_log_index,
@@ -416,8 +453,23 @@ fn state_machine(
 
                 on_read_stream(&mut persistent, stream_id, resp);
             }
+
+            Msg::Status { resp } => {
+                on_status(&persistent, &volatile, resp);
+            }
         }
     }
+}
+
+fn on_status(persistent: &Persistent, volatile: &Volatile, resp: oneshot::Sender<StatusResp>) {
+    let _ = resp.send(StatusResp {
+        id: volatile.id.clone(),
+        status: volatile.status,
+        leader_id: volatile.leader.clone(),
+        term: persistent.term,
+        log_index: persistent.commit_index,
+        global: 0,
+    });
 }
 
 fn on_read_stream(
@@ -492,6 +544,7 @@ pub fn on_vote_received(
 
     if persistent.term > term {
         volatile.status = Status::Follower;
+        volatile.leader = Some(node_id);
         volatile.election_timeout_range.pick_timeout_value();
         volatile.election_timeout = Instant::now();
         volatile.voted_for = None;
@@ -535,6 +588,7 @@ pub fn on_append_entries(
     // figuring out.
     volatile.election_timeout = Instant::now();
     volatile.status = Status::Follower;
+    volatile.leader = Some(leader_id);
 
     // Current node doesn't have that point of reference from this index position.
     if !persistent
@@ -665,6 +719,7 @@ fn find_known_reference_point(
 
 fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.status = Status::Leader;
+    volatile.leader = Some(volatile.id.clone());
     volatile.reset();
 
     let last_log_index = persistent.entries.last_index();
@@ -695,6 +750,7 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
 
 fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.status = Status::Candidate;
+    volatile.leader = None;
     persistent.term += 1;
     volatile.voted_for = Some(persistent.id.clone());
 

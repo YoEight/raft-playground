@@ -81,22 +81,25 @@ impl State {
             };
 
             cells.push(Cell::from(format!(
-                "{} -> localhost:{} {}",
+                "{}: localhost:{} {}",
                 idx,
                 node.port(),
                 suffix
             )));
             match node.connectivity() {
-                Connectivity::Online => {
-                    cells.push(Cell::from("online").style(Style::default().fg(Color::Green)))
+                Connectivity::Online(status) => {
+                    cells.push(Cell::from("online").style(Style::default().fg(Color::Green)));
+                    cells.push(Cell::from(status.term.to_string()));
+                    cells.push(Cell::from(status.status.to_string()));
+                    cells.push(Cell::from(status.log_index.to_string()));
                 }
                 Connectivity::Offline => {
-                    cells.push(Cell::from("offline").style(Style::default().fg(Color::Red)))
+                    cells.push(Cell::from("offline").style(Style::default().fg(Color::Red)));
+                    cells.push(Cell::from("".to_string()));
+                    cells.push(Cell::from("".to_string()));
+                    cells.push(Cell::from("".to_string()));
                 }
             }
-
-            cells.push(Cell::from("0"));
-            cells.push(Cell::from("-"));
 
             rows.push(Row::new(cells));
         }
@@ -111,10 +114,11 @@ impl State {
                     .title("Nodes"),
             )
             .widths(&[
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
             ]);
 
         frame.render_stateful_widget(node_table, content_chunks[0], &mut self.nodes_state);
@@ -272,7 +276,7 @@ impl State {
 
     pub fn on_node_connectivity_changed(&mut self, event: NodeConnectivityEvent) {
         let status = match event.connectivity {
-            Connectivity::Online => "online",
+            Connectivity::Online(_) => "online",
             Connectivity::Offline => "offline",
         };
 
@@ -534,6 +538,7 @@ impl View {
                 Cell::from("Connectivity").style(Style::default().add_modifier(Modifier::BOLD)),
                 Cell::from("Term").style(Style::default().add_modifier(Modifier::BOLD)),
                 Cell::from("State").style(Style::default().add_modifier(Modifier::BOLD)),
+                Cell::from("Index").style(Style::default().add_modifier(Modifier::BOLD)),
             ])
             .height(1)
             .style(Style::default().add_modifier(Modifier::REVERSED)),

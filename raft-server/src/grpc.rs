@@ -1,5 +1,7 @@
 use futures::stream::BoxStream;
-use raft_common::{AppendReq, AppendResp, EntriesReq, EntriesResp, ReadResp, VoteReq, VoteResp};
+use raft_common::{
+    AppendReq, AppendResp, EntriesReq, EntriesResp, ReadResp, StatusResp, VoteReq, VoteResp,
+};
 use tonic::{Request, Response, Status};
 
 use crate::machine::NodeClient;
@@ -121,5 +123,28 @@ impl raft_common::server::Api for ApiImpl {
 
     async fn ping(&self, _request: Request<()>) -> Result<Response<()>, Status> {
         Ok(Response::new(()))
+    }
+
+    async fn status(&self, _: Request<()>) -> Result<Response<StatusResp>, Status> {
+        let snapshot = self.node.status().await;
+
+        Ok(Response::new(StatusResp {
+            host: snapshot.id.host,
+            port: snapshot.id.port,
+            term: snapshot.term,
+            status: snapshot.status.to_string(),
+            log_index: snapshot.log_index,
+            global: snapshot.global,
+            leader_host: snapshot
+                .leader_id
+                .as_ref()
+                .map(|id| id.host.clone())
+                .unwrap_or_default(),
+            leader_port: snapshot
+                .leader_id
+                .as_ref()
+                .map(|id| id.port)
+                .unwrap_or_default(),
+        }))
     }
 }

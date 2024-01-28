@@ -6,7 +6,7 @@ use hyper::client::HttpConnector;
 use hyper::Client;
 use names::Generator;
 use raft_common::client::{ApiClient, RaftClient};
-use raft_common::{AppendReq, ReadReq};
+use raft_common::{AppendReq, ReadReq, StatusResp};
 use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -18,10 +18,24 @@ use tonic::codegen::tokio_stream::StreamExt;
 use tonic::Request;
 use uuid::Uuid;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub enum Connectivity {
-    Online,
+    Online(StatusResp),
     Offline,
+}
+
+impl Connectivity {
+    pub fn is_online(&self) -> bool {
+        if let Connectivity::Online(_) = self {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn is_offline(&self) -> bool {
+        !self.is_online()
+    }
 }
 
 struct Proc {
@@ -138,19 +152,12 @@ impl Node {
         self.port
     }
 
-    pub fn connectivity(&self) -> Connectivity {
-        self.connectivity
+    pub fn connectivity(&self) -> &Connectivity {
+        &self.connectivity
     }
 
     pub fn set_connectivity(&mut self, connectivity: Connectivity) {
         self.connectivity = connectivity;
-        if connectivity == Connectivity::Offline {
-            let proc_ref = self.proc.clone();
-            self.handle.block_on(async move {
-                let mut proc = proc_ref.lock().await;
-                *proc = None;
-            });
-        }
     }
 
     /// Indicates if the node was started outside of the REPL process.
@@ -409,7 +416,7 @@ fn spawn_healthcheck_process(
                 break;
             }
 
-            match inner.api_client.ping(Request::new(())).await {
+            match inner.api_client.status(Request::new(())).await {
                 Err(e) => {
                     let _ = mailbox.send(ReplEvent::warn(format!(
                         "Node {} connection error: {}",
@@ -422,9 +429,14 @@ fn spawn_healthcheck_process(
                     connectivity = Some(Connectivity::Offline);
                 }
 
-                Ok(_) => {
-                    let _ = mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Online));
-                    connectivity = Some(Connectivity::Online);
+                Ok(resp) => {
+                    let resp = resp.into_inner();
+                    let _ = mailbox.send(ReplEvent::node_connectivity(
+                        node,
+                        Connectivity::Online(resp.clone()),
+                    ));
+
+                    connectivity = Some(Connectivity::Online(resp));
                 }
             }
         }

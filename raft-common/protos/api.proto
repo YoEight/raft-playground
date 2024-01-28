@@ -5,6 +5,7 @@ service Api {
   rpc Append(AppendReq) returns (AppendResp);
   rpc Read(ReadReq) returns (stream ReadResp);
   rpc Ping(Empty) returns (Empty);
+  rpc Status(Empty) returns (StatusResp);
 }
 
 message Empty {}
@@ -27,4 +28,15 @@ message ReadResp {
   uint64 global = 2;
   uint64 revision = 3;
   bytes payload = 4;
+}
+
+message StatusResp {
+  string host = 1;
+  uint32 port = 2;
+  string status = 3;
+  uint64 term = 4;
+  uint64 log_index = 5;
+  uint64 global = 6;
+  string leader_host = 7;
+  uint32 leader_port = 8;
 }

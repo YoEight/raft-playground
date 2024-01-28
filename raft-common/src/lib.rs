@@ -14,6 +14,6 @@ pub mod server {
 }
 
 pub use proto::{
-    AppendReq, AppendResp, EntriesReq, EntriesResp, Entry, NodeId, ReadReq, ReadResp, VoteReq,
-    VoteResp,
+    AppendReq, AppendResp, EntriesReq, EntriesResp, Entry, NodeId, ReadReq, ReadResp, StatusResp,
+    VoteReq, VoteResp,
 };
