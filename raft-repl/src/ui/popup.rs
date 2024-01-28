@@ -2,11 +2,10 @@ use ratatui::backend::Backend;
 use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Frame;
 use ratatui_textarea::{Input, Key};
-use std::cmp::max;
 
 pub struct Popup {
     title: String,

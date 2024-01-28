@@ -5,7 +5,7 @@ use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
 use names::Generator;
-use raft_common::client::{ApiClient, RaftClient};
+use raft_common::client::ApiClient;
 use raft_common::{AppendReq, ReadReq, StatusResp};
 use std::process::Stdio;
 use std::sync::{mpsc, Arc};
@@ -24,23 +24,8 @@ pub enum Connectivity {
     Offline,
 }
 
-impl Connectivity {
-    pub fn is_online(&self) -> bool {
-        if let Connectivity::Online(_) = self {
-            return true;
-        }
-
-        false
-    }
-
-    pub fn is_offline(&self) -> bool {
-        !self.is_online()
-    }
-}
-
 struct Proc {
     id: Uuid,
-    raft_client: RaftClient<Client<HttpConnector, BoxBody>>,
     api_client: ApiClient<Client<HttpConnector, BoxBody>>,
     kind: ProcKind,
 }
@@ -131,13 +116,11 @@ impl Node {
             connector.enforce_http(false);
             let client = hyper::Client::builder().http2_only(true).build(connector);
             let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port)).unwrap();
-            let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
             let api_client = ApiClient::with_origin(client, uri);
             let id = Uuid::new_v4();
 
             *proc = Some(Proc {
                 id,
-                raft_client,
                 api_client: api_client.clone(),
                 kind: ProcKind::external(),
             });
@@ -160,7 +143,7 @@ impl Node {
         self.connectivity = connectivity;
     }
 
-    /// Indicates if the node was started outside of the REPL process.
+    /// Indicates if the node was started outside the REPL process.
     pub fn is_external(&self) -> Option<bool> {
         let proc_ref = self.proc.clone();
         self.handle.block_on(async move {
@@ -235,13 +218,11 @@ impl Node {
                     let client = hyper::Client::builder().http2_only(true).build(connector);
                     let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port))
                         .unwrap();
-                    let raft_client = RaftClient::with_origin(client.clone(), uri.clone());
                     let api_client = ApiClient::with_origin(client, uri);
                     let id = Uuid::new_v4();
 
                     *proc = Some(Proc {
                         id,
-                        raft_client,
                         api_client: api_client.clone(),
                         kind: ProcKind::managed(child),
                     });
@@ -351,7 +332,15 @@ impl Node {
 
                         loop {
                             match stream.try_next().await {
-                                Err(e) => {}
+                                Err(e) => {
+                                    let _ = mailbox.send(ReplEvent::error(format!(
+                                        "Reading stream '{}' from node {} caused an error: {}",
+                                        args.stream,
+                                        args.node,
+                                        e.message()
+                                    )));
+                                }
+
                                 Ok(resp) => {
                                     if let Some(resp) = resp {
                                         events.push(RecordedEvent {
@@ -401,7 +390,6 @@ fn spawn_healthcheck_process(
 ) {
     handle.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
-        let mut connectivity = None;
 
         loop {
             ticker.tick().await;
@@ -425,18 +413,14 @@ fn spawn_healthcheck_process(
                     )));
 
                     let _ = mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
-
-                    connectivity = Some(Connectivity::Offline);
                 }
 
                 Ok(resp) => {
                     let resp = resp.into_inner();
                     let _ = mailbox.send(ReplEvent::node_connectivity(
                         node,
-                        Connectivity::Online(resp.clone()),
+                        Connectivity::Online(resp),
                     ));
-
-                    connectivity = Some(Connectivity::Online(resp));
                 }
             }
         }

@@ -10,6 +10,7 @@ pub struct History<A> {
     temp: String,
 }
 
+#[allow(dead_code)]
 pub fn in_memory_history() -> io::Result<History<Noop>> {
     History::new(Noop)
 }
@@ -89,6 +90,7 @@ impl<A: Persistence> History<A> {
         )
     }
 
+    #[allow(dead_code)]
     pub fn entries(&self) -> &Vec<String> {
         &self.entries
     }

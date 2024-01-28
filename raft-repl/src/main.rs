@@ -17,7 +17,6 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use ratatui_textarea::{Input, Key};
 use std::io;
 use std::io::StdoutLock;
 use std::sync::mpsc;

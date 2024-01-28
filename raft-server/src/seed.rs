@@ -1,4 +1,4 @@
-use crate::machine::{AppendEntriesResp, Msg, NodeClient};
+use crate::machine::{AppendEntriesResp, NodeClient};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};

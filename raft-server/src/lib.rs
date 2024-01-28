@@ -18,7 +18,7 @@ pub mod seed;
 
 pub struct Node {
     id: NodeId,
-    seeds: Vec<Seed>,
+    _seeds: Vec<Seed>,
     handle: thread::JoinHandle<()>,
     client: NodeClient,
 }
@@ -53,7 +53,7 @@ impl Node {
 
         Ok(Self {
             id,
-            seeds,
+            _seeds: seeds,
             client,
             handle,
         })
