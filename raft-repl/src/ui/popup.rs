@@ -1,19 +1,18 @@
-use ratatui::backend::Backend;
 use ratatui::prelude::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Frame;
-use ratatui_textarea::{Input, Key};
+use tui_textarea::{Input, Key};
 
 pub struct Popup {
     title: String,
     text: Text<'static>,
-    scroll_vert: u16,
-    scroll_horiz: u16,
-    content_length_vert: u16,
-    content_length_horiz: u16,
+    scroll_vert: usize,
+    scroll_horiz: usize,
+    content_length_vert: usize,
+    content_length_horiz: usize,
     pub shown: bool,
 }
 
@@ -36,13 +35,13 @@ impl Popup {
 
     pub fn set_text(&mut self, text: Text<'static>) {
         self.text = text;
-        self.content_length_horiz = self.text.width() as u16;
-        self.content_length_vert = self.text.height() as u16;
+        self.content_length_horiz = self.text.width();
+        self.content_length_vert = self.text.height();
         self.scroll_horiz = 0;
         self.scroll_vert = 0;
     }
 
-    pub fn draw<B: Backend>(&mut self, f: &mut Frame<B>) {
+    pub fn draw(&mut self, f: &mut Frame) {
         let size = f.size();
         // let chunks = Layout::default()
         //     .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
@@ -64,10 +63,10 @@ impl Popup {
 
         let paragraph = Paragraph::new(self.text.clone())
             .alignment(Alignment::Left)
-            .scroll((self.scroll_vert, self.scroll_horiz));
+            .scroll((self.scroll_vert as u16, self.scroll_horiz as u16));
 
         f.render_widget(paragraph, rect);
-        if self.content_length_vert > rect.height {
+        if self.content_length_vert as u16 > rect.height {
             let scrollbar_vert = Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .symbols(ratatui::symbols::scrollbar::VERTICAL);
@@ -88,7 +87,7 @@ impl Popup {
             self.scroll_vert = 0;
         }
 
-        if self.content_length_horiz > rect.width {
+        if self.content_length_horiz as u16 > rect.width {
             let scrollbar_horiz = Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
                 .symbols(ratatui::symbols::scrollbar::HORIZONTAL)

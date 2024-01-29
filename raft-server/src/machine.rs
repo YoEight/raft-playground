@@ -12,6 +12,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
+use tracing::error;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -84,6 +85,7 @@ pub enum Status {
     Follower,
     Candidate,
     Leader,
+    Invalid,
 }
 
 impl Display for Status {
@@ -92,6 +94,7 @@ impl Display for Status {
             Status::Follower => write!(f, "follower"),
             Status::Candidate => write!(f, "candidate"),
             Status::Leader => write!(f, "leader"),
+            Status::Invalid => write!(f, "invalid"),
         }
     }
 }
@@ -243,10 +246,14 @@ impl NodeClient {
             })
             .is_err()
         {
-            panic!("Node is down");
+            error!("Node is down");
         }
 
-        recv.await.unwrap()
+        if let Ok(res) = recv.await {
+            res
+        } else {
+            (0, false)
+        }
     }
 
     pub async fn append_entries(
@@ -272,7 +279,7 @@ impl NodeClient {
             })
             .is_err()
         {
-            panic!("Node is down");
+            error!("Node is down");
         }
 
         recv.await.unwrap()
@@ -289,7 +296,7 @@ impl NodeClient {
             })
             .is_err()
         {
-            panic!("Node is down");
+            error!("Node is down");
         }
 
         recv.await.unwrap()
@@ -302,7 +309,7 @@ impl NodeClient {
             .send(Msg::ReadStream { stream_id, resp })
             .is_err()
         {
-            panic!("Node is down");
+            error!("Node is down");
         }
 
         recv.await.unwrap()
@@ -312,10 +319,24 @@ impl NodeClient {
         let (resp, recv) = oneshot::channel();
 
         if self.sender.send(Msg::Status { resp }).is_err() {
-            panic!("Node is down");
+            error!("Node is down");
         }
 
-        recv.await.unwrap()
+        if let Ok(resp) = recv.await {
+            resp
+        } else {
+            StatusResp {
+                id: NodeId {
+                    host: "unknown".to_string(),
+                    port: 0,
+                },
+                status: Status::Invalid,
+                leader_id: None,
+                term: 0,
+                log_index: 0,
+                global: 0,
+            }
+        }
     }
 
     pub fn vote_received(&self, node_id: NodeId, term: u64, granted: bool) {

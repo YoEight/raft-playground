@@ -1,6 +1,6 @@
 use crate::data::RecordedEvent;
 use crate::node::Connectivity;
-use ratatui_textarea::Input;
+use tui_textarea::Input;
 
 pub enum ReplEvent {
     Input(Input),

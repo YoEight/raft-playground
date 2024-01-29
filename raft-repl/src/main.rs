@@ -22,8 +22,15 @@ use std::io::StdoutLock;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
+use tracing_appender::rolling;
 
 fn main() -> eyre::Result<()> {
+    let logs = rolling::daily("./logs", "repl.txt");
+    tracing_subscriber::fmt()
+        .with_file(true)
+        .with_ansi(false)
+        .with_writer(logs)
+        .init();
     let (sender, mailbox) = mpsc::channel();
 
     input_process(sender.clone());

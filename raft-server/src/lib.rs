@@ -1,4 +1,5 @@
 use std::{sync::mpsc, thread, time::Duration};
+use tokio::runtime::Handle;
 
 use grpc::{ApiImpl, RaftImpl};
 use machine::{NodeClient, Persistent};
@@ -7,7 +8,7 @@ use raft_common::{
     NodeId,
 };
 use seed::Seed;
-use tokio::task;
+use tokio::task::JoinHandle;
 use tonic::transport::{self, Server};
 
 pub mod entry;
@@ -21,10 +22,12 @@ pub struct Node {
     _seeds: Vec<Seed>,
     handle: thread::JoinHandle<()>,
     client: NodeClient,
+    pub join: Option<JoinHandle<Result<(), transport::Error>>>,
+    runtime: Handle,
 }
 
 impl Node {
-    pub fn new(opts: options::Options) -> eyre::Result<Self> {
+    pub fn new(runtime: Handle, opts: options::Options) -> eyre::Result<Self> {
         let persistent = Persistent::load();
         let (sender, mailbox) = mpsc::channel();
         let client = NodeClient::new(sender);
@@ -42,11 +45,13 @@ impl Node {
                 port: seed_port as u32,
             };
 
-            seeds.push(Seed::new(node_id, client.clone()));
+            seeds.push(Seed::new(node_id, client.clone(), runtime.clone()));
         }
 
         if (seeds.len() + 1) % 2 == 0 {
-            panic!("Cluster size is an even number which could cause issues for leader election");
+            eyre::bail!(
+                "Cluster size is an even number which could cause issues for leader election"
+            );
         }
 
         let handle = machine::start(persistent, id.clone(), seeds.clone(), mailbox);
@@ -56,17 +61,19 @@ impl Node {
             _seeds: seeds,
             client,
             handle,
+            join: None,
+            runtime,
         })
     }
 
-    pub fn start(&self) -> task::JoinHandle<Result<(), transport::Error>> {
+    pub fn start(&mut self) {
         let addr = format!("{}:{}", self.id.host, self.id.port)
             .parse()
             .unwrap();
         let client = self.client.clone();
         let mut ticking = tokio::time::interval(Duration::from_millis(5));
 
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             loop {
                 ticking.tick().await;
                 if !client.tick() {
@@ -75,15 +82,17 @@ impl Node {
             }
         });
 
-        println!("Listening on {}:{}", self.id.host, self.id.port);
+        // println!("Listening on {}:{}", self.id.host, self.id.port);
         let client = self.client.clone();
-        tokio::spawn(async move {
+        let join = self.runtime.spawn(async move {
             Server::builder()
                 .add_service(RaftServer::new(RaftImpl::new(client.clone())))
                 .add_service(ApiServer::new(ApiImpl::new(client)))
                 .serve(addr)
                 .await
-        })
+        });
+
+        self.join = Some(join);
     }
 
     pub fn wait_for_completion(self) {

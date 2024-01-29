@@ -2,6 +2,7 @@ use crate::machine::{AppendEntriesResp, NodeClient};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
+use tokio::runtime::Handle;
 use tonic::Request;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
@@ -11,10 +12,11 @@ pub struct Seed {
     pub id: NodeId,
     pub mailbox: NodeClient,
     pub client: RaftClient<HyperClient>,
+    runtime: Handle,
 }
 
 impl Seed {
-    pub fn new(id: NodeId, mailbox: NodeClient) -> Self {
+    pub fn new(id: NodeId, mailbox: NodeClient, runtime: Handle) -> Self {
         let uri = hyper::Uri::from_maybe_shared(format!("http://{}:{}", id.host.as_str(), id.port))
             .unwrap();
 
@@ -25,6 +27,7 @@ impl Seed {
             id,
             mailbox,
             client,
+            runtime,
         }
     }
 
@@ -39,7 +42,7 @@ impl Seed {
         let node_client = self.mailbox.clone();
         let node_id = self.id.clone();
 
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let resp = client
                 .request_vote(Request::new(VoteReq {
                     term,
@@ -68,7 +71,7 @@ impl Seed {
         let mut client = self.client.clone();
         let node_id = self.id.clone();
         let node_client = self.mailbox.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let resp = client
                 .append_entries(Request::new(EntriesReq {
                     term,

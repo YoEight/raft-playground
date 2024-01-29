@@ -1,20 +1,18 @@
 use clap::Parser;
 use hyper::client::HttpConnector;
 use raft_common::client::ApiClient;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::{Alignment, Direction, Line, Span, Text};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
-use ratatui_textarea::{CursorMove, Input, Key, TextArea};
 use serde_json::Value;
-use std::io::StdoutLock;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 use tonic::Request;
+use tui_textarea::{CursorMove, Input, Key, TextArea};
 
 use crate::command::{
     AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Spawn, Start, Stop,
@@ -66,7 +64,7 @@ impl State {
         })
     }
 
-    pub fn draw(&mut self, frame: &mut Frame<CrosstermBackend<StdoutLock>>) {
+    pub fn draw(&mut self, frame: &mut Frame) {
         let main_chunks = self.view.main_layout.split(frame.size());
         let content_chunks = self.view.content_layout.split(main_chunks[0]);
         let mut rows = Vec::new();
@@ -104,22 +102,24 @@ impl State {
             rows.push(Row::new(cells));
         }
 
-        let node_table = Table::new(rows)
-            .header(self.view.node_table_header.clone())
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title_alignment(Alignment::Right)
-                    .title("Nodes"),
-            )
-            .widths(&[
+        let node_table = Table::new(
+            rows,
+            &[
                 Constraint::Percentage(20),
                 Constraint::Percentage(20),
                 Constraint::Percentage(20),
                 Constraint::Percentage(20),
                 Constraint::Percentage(20),
-            ]);
+            ],
+        )
+        .header(self.view.node_table_header.clone())
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title_alignment(Alignment::Right)
+                .title("Nodes"),
+        );
 
         frame.render_stateful_widget(node_table, content_chunks[0], &mut self.nodes_state);
 
