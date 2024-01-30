@@ -1,6 +1,7 @@
 use crate::entry::{Entries, RecordedEvent};
 use crate::seed::Seed;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use eyre::bail;
 use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
@@ -12,7 +13,6 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tracing::error;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -85,7 +85,6 @@ pub enum Status {
     Follower,
     Candidate,
     Leader,
-    Invalid,
 }
 
 impl Display for Status {
@@ -94,7 +93,6 @@ impl Display for Status {
             Status::Follower => write!(f, "follower"),
             Status::Candidate => write!(f, "candidate"),
             Status::Leader => write!(f, "leader"),
-            Status::Invalid => write!(f, "invalid"),
         }
     }
 }
@@ -233,7 +231,7 @@ impl NodeClient {
         candidate_id: NodeId,
         last_log_index: u64,
         last_log_term: u64,
-    ) -> (u64, bool) {
+    ) -> eyre::Result<(u64, bool)> {
         let (resp, recv) = oneshot::channel();
         if self
             .sender
@@ -246,13 +244,13 @@ impl NodeClient {
             })
             .is_err()
         {
-            error!("Node is down");
+            bail!("Node is down");
         }
 
         if let Ok(res) = recv.await {
-            res
+            Ok(res)
         } else {
-            (0, false)
+            bail!("Unexpected error when asked to vote")
         }
     }
 
@@ -264,7 +262,7 @@ impl NodeClient {
         prev_log_term: u64,
         leader_commit: u64,
         entries: Vec<Entry>,
-    ) -> (u64, bool) {
+    ) -> eyre::Result<(u64, bool)> {
         let (resp, recv) = oneshot::channel();
         if self
             .sender
@@ -279,63 +277,72 @@ impl NodeClient {
             })
             .is_err()
         {
-            error!("Node is down");
+            bail!("Node is down");
         }
 
-        recv.await.unwrap()
+        if let Ok(tuple) = recv.await {
+            Ok(tuple)
+        } else {
+            bail!("Unexpected when asked to replicate entries")
+        }
     }
 
-    pub async fn append_stream(&self, stream_id: String, events: Vec<Bytes>) -> Option<u64> {
+    pub async fn append_stream(
+        &self,
+        stream_id: String,
+        events: Vec<Bytes>,
+    ) -> eyre::Result<Option<u64>> {
         let (resp, recv) = oneshot::channel();
         if self
             .sender
             .send(Msg::AppendStream {
-                stream_id,
+                stream_id: stream_id.clone(),
                 events,
                 resp,
             })
             .is_err()
         {
-            error!("Node is down");
-        }
-
-        recv.await.unwrap()
-    }
-
-    pub async fn read_stream(&self, stream_id: String) -> Option<Vec<RecordedEvent>> {
-        let (resp, recv) = oneshot::channel();
-        if self
-            .sender
-            .send(Msg::ReadStream { stream_id, resp })
-            .is_err()
-        {
-            error!("Node is down");
-        }
-
-        recv.await.unwrap()
-    }
-
-    pub async fn status(&self) -> StatusResp {
-        let (resp, recv) = oneshot::channel();
-
-        if self.sender.send(Msg::Status { resp }).is_err() {
-            error!("Node is down");
+            bail!("Node is down");
         }
 
         if let Ok(resp) = recv.await {
-            resp
+            Ok(resp)
         } else {
-            StatusResp {
-                id: NodeId {
-                    host: "unknown".to_string(),
-                    port: 0,
-                },
-                status: Status::Invalid,
-                leader_id: None,
-                term: 0,
-                log_index: 0,
-                global: 0,
-            }
+            bail!("Unexpected error when appending stream '{}'", stream_id)
+        }
+    }
+
+    pub async fn read_stream(&self, stream_id: String) -> eyre::Result<Option<Vec<RecordedEvent>>> {
+        let (resp, recv) = oneshot::channel();
+        if self
+            .sender
+            .send(Msg::ReadStream {
+                stream_id: stream_id.clone(),
+                resp,
+            })
+            .is_err()
+        {
+            bail!("Node is down");
+        }
+
+        if let Ok(batch) = recv.await {
+            Ok(batch)
+        } else {
+            bail!("Unexpected error when looking for stream '{}'", stream_id)
+        }
+    }
+
+    pub async fn status(&self) -> eyre::Result<StatusResp> {
+        let (resp, recv) = oneshot::channel();
+
+        if self.sender.send(Msg::Status { resp }).is_err() {
+            bail!("Node is down");
+        }
+
+        if let Ok(status) = recv.await {
+            Ok(status)
+        } else {
+            bail!("Unexpected error when querying the status")
         }
     }
 
@@ -689,7 +696,7 @@ pub fn on_append_entries_resp(
             // node. From there we find the previous entry to this index and pass it as a point of
             // reference to maintain log consistency.
             let next_index = volatile.next_index.get_mut(&node_id).unwrap();
-            *next_index -= 1;
+            *next_index = next_index.saturating_sub(1);
 
             let (prev_log_index, prev_log_term) =
                 persistent.entries.get_previous_entry(*next_index);

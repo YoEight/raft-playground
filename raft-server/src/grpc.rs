@@ -27,7 +27,7 @@ impl raft_common::server::Raft for RaftImpl {
             return Err(Status::invalid_argument("Candidate id is not provided"));
         };
 
-        let (term, vote_granted) = self
+        match self
             .node
             .request_vote(
                 vote.term,
@@ -35,9 +35,11 @@ impl raft_common::server::Raft for RaftImpl {
                 vote.last_log_index,
                 vote.last_log_term,
             )
-            .await;
-
-        Ok(Response::new(VoteResp { term, vote_granted }))
+            .await
+        {
+            Err(e) => Err(Status::unavailable(e.to_string())),
+            Ok((term, vote_granted)) => Ok(Response::new(VoteResp { term, vote_granted })),
+        }
     }
 
     async fn append_entries(
@@ -52,7 +54,7 @@ impl raft_common::server::Raft for RaftImpl {
             return Err(Status::invalid_argument("Candidate id not provided"));
         };
 
-        let (term, success) = self
+        match self
             .node
             .append_entries(
                 request.term,
@@ -62,9 +64,11 @@ impl raft_common::server::Raft for RaftImpl {
                 request.leader_commit,
                 request.entries,
             )
-            .await;
-
-        Ok(Response::new(EntriesResp { term, success }))
+            .await
+        {
+            Err(e) => Err(Status::unavailable(e.to_string())),
+            Ok((term, success)) => Ok(Response::new(EntriesResp { term, success })),
+        }
     }
 }
 
@@ -83,16 +87,22 @@ impl ApiImpl {
 impl raft_common::server::Api for ApiImpl {
     async fn append(&self, request: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
         let request = request.into_inner();
-        if let Some(next_position) = self
+        match self
             .node
             .append_stream(request.stream_id, request.events)
             .await
         {
-            Ok(Response::new(AppendResp {
-                position: next_position,
-            }))
-        } else {
-            Err(Status::failed_precondition("not-leader"))
+            Err(e) => Err(Status::unavailable(e.to_string())),
+
+            Ok(next_position) => {
+                if let Some(next_position) = next_position {
+                    Ok(Response::new(AppendResp {
+                        position: next_position,
+                    }))
+                } else {
+                    Err(Status::failed_precondition("not-leader"))
+                }
+            }
         }
     }
 
@@ -103,21 +113,28 @@ impl raft_common::server::Api for ApiImpl {
         request: Request<raft_common::ReadReq>,
     ) -> Result<Response<Self::ReadStream>, Status> {
         let request = request.into_inner();
-        if let Some(events) = self.node.read_stream(request.stream_id).await {
-            let streaming = async_stream::stream! {
-                for event in events {
-                    yield Ok(ReadResp {
-                        stream_id: event.stream_id,
-                        global: event.global,
-                        revision: event.revision,
-                        payload: event.payload,
-                    });
-                }
-            };
 
-            Ok(Response::new(Box::pin(streaming)))
-        } else {
-            Err(Status::failed_precondition("not-leader"))
+        match self.node.read_stream(request.stream_id).await {
+            Err(e) => Err(Status::unavailable(e.to_string())),
+
+            Ok(events) => {
+                if let Some(events) = events {
+                    let streaming = async_stream::stream! {
+                        for event in events {
+                            yield Ok(ReadResp {
+                                stream_id: event.stream_id,
+                                global: event.global,
+                                revision: event.revision,
+                                payload: event.payload,
+                            });
+                        }
+                    };
+
+                    Ok(Response::new(Box::pin(streaming)))
+                } else {
+                    Err(Status::failed_precondition("not-leader"))
+                }
+            }
         }
     }
 
@@ -126,25 +143,27 @@ impl raft_common::server::Api for ApiImpl {
     }
 
     async fn status(&self, _: Request<()>) -> Result<Response<StatusResp>, Status> {
-        let snapshot = self.node.status().await;
+        match self.node.status().await {
+            Err(e) => Err(Status::unavailable(e.to_string())),
 
-        Ok(Response::new(StatusResp {
-            host: snapshot.id.host,
-            port: snapshot.id.port,
-            term: snapshot.term,
-            status: snapshot.status.to_string(),
-            log_index: snapshot.log_index,
-            global: snapshot.global,
-            leader_host: snapshot
-                .leader_id
-                .as_ref()
-                .map(|id| id.host.clone())
-                .unwrap_or_default(),
-            leader_port: snapshot
-                .leader_id
-                .as_ref()
-                .map(|id| id.port)
-                .unwrap_or_default(),
-        }))
+            Ok(snapshot) => Ok(Response::new(StatusResp {
+                host: snapshot.id.host,
+                port: snapshot.id.port,
+                term: snapshot.term,
+                status: snapshot.status.to_string(),
+                log_index: snapshot.log_index,
+                global: snapshot.global,
+                leader_host: snapshot
+                    .leader_id
+                    .as_ref()
+                    .map(|id| id.host.clone())
+                    .unwrap_or_default(),
+                leader_port: snapshot
+                    .leader_id
+                    .as_ref()
+                    .map(|id| id.port)
+                    .unwrap_or_default(),
+            })),
+        }
     }
 }

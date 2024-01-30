@@ -67,7 +67,7 @@ impl Entries {
             return entry.term;
         }
 
-        panic!("Entry at index {} is not found", index);
+        0
     }
 
     pub fn get_previous_entry(&self, ref_index: u64) -> (u64, u64) {
