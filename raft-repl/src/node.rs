@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use tonic::body::BoxBody;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::Request;
+use tracing::{error, info};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -25,6 +26,8 @@ pub enum Connectivity {
 
 struct Proc {
     id: Uuid,
+    host: String,
+    port: u16,
     api_client: ApiClient<Client<HttpConnector, BoxBody>>,
     kind: ProcKind,
 }
@@ -111,11 +114,13 @@ impl Node {
             connector.enforce_http(false);
             let client = hyper::Client::builder().http2_only(true).build(connector);
             let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port)).unwrap();
-            let api_client = ApiClient::with_origin(client, uri);
+            let api_client = ApiClient::with_origin(client, uri.clone());
             let id = Uuid::new_v4();
 
             *proc = Some(Proc {
                 id,
+                host: uri.host().unwrap_or_default().to_string(),
+                port: uri.port_u16().unwrap_or_default(),
                 api_client: api_client.clone(),
                 kind: ProcKind::external(),
             });
@@ -197,6 +202,7 @@ impl Node {
 
             match node {
                 Err(e) => {
+                    error!("node_{}:{} error when starting: {}", "localhost", port, e);
                     let _ = mailbox.send(ReplEvent::error(format!(
                         "Error when starting node {}: {}",
                         idx, e
@@ -218,10 +224,13 @@ impl Node {
 
                     *proc = Some(Proc {
                         id,
+                        port: port as u16,
+                        host: "localhost".to_string(),
                         api_client: api_client.clone(),
                         kind: ProcKind::managed(node),
                     });
 
+                    info!("node_{}:{} started", "localhost", port);
                     let _ = mailbox.send(ReplEvent::msg(format!("Node {} is starting", idx)));
                     spawn_healthcheck_process(id, idx, &handle, mailbox, proc_ref.clone());
                 }
@@ -403,6 +412,10 @@ fn spawn_healthcheck_process(
 
             match inner.api_client.status(Request::new(())).await {
                 Err(e) => {
+                    error!(
+                        "node_{}:{} error when requesting status: {}",
+                        inner.host, inner.port, e
+                    );
                     let _ = mailbox.send(ReplEvent::warn(format!(
                         "Node {} connection error: {}",
                         node,
@@ -414,6 +427,7 @@ fn spawn_healthcheck_process(
 
                 Ok(resp) => {
                     let resp = resp.into_inner();
+                    info!("node_{}:{} status = {:?}", inner.host, inner.port, resp);
                     let _ = mailbox.send(ReplEvent::node_connectivity(
                         node,
                         Connectivity::Online(resp),

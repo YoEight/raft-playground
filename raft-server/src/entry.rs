@@ -113,7 +113,7 @@ impl Entries {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RecordedEvent {
     pub stream_id: String,
     pub global: u64,

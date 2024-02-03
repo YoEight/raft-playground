@@ -13,9 +13,11 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
+use tracing::info;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
+#[derive(Debug)]
 pub enum Msg {
     RequestVote {
         term: u64,
@@ -66,11 +68,13 @@ pub enum Msg {
     Tick,
 }
 
+#[derive(Debug)]
 pub struct AppendEntriesResp {
     pub term: u64,
     pub success: bool,
 }
 
+#[derive(Debug)]
 pub struct StatusResp {
     pub id: NodeId,
     pub status: Status,
@@ -389,10 +393,13 @@ fn state_machine(
     seeds: Vec<Seed>,
     mailbox: Receiver<Msg>,
 ) {
-    let mut volatile = Volatile::new(node_id, seeds);
+    let mut volatile = Volatile::new(node_id.clone(), seeds);
 
     loop {
-        match mailbox.recv().unwrap() {
+        let msg = mailbox.recv().unwrap();
+        info!("node_{}:{} received {:?}", node_id.host, node_id.port, msg);
+
+        match msg {
             Msg::RequestVote {
                 term,
                 candidate_id,
@@ -578,6 +585,11 @@ pub fn on_vote_received(
         volatile.voted_for = None;
         volatile.next_index.clear();
         volatile.match_index.clear();
+
+        info!(
+            "Node_{}:{} switched to follower because received an higher term from vote request",
+            volatile.id.host, volatile.id.port
+        );
         return;
     }
 
@@ -618,6 +630,10 @@ pub fn on_append_entries(
     volatile.status = Status::Follower;
     volatile.leader = Some(leader_id);
 
+    info!(
+        "Node_{}:{} as follower because received a valid replication request",
+        volatile.id.host, volatile.id.port
+    );
     // Current node doesn't have that point of reference from this index position.
     if !persistent
         .entries
@@ -670,6 +686,10 @@ pub fn on_request_vote(
             volatile.voted_for = Some(candidate_id);
             volatile.status = Status::Follower;
             persistent.term = term;
+            info!(
+                "Node_{}:{} switch to follower because received a valid vote request",
+                volatile.id.host, volatile.id.port
+            );
 
             return (term, true);
         }
@@ -750,6 +770,11 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.leader = Some(volatile.id.clone());
     volatile.reset();
 
+    info!(
+        "Node_{}:{} switched to leader",
+        volatile.id.host, volatile.id.port
+    );
+
     let last_log_index = persistent.entries.last_index();
     // Send heartbeat request to assert dominance.
     for seed in volatile.seeds.clone() {
@@ -781,6 +806,11 @@ fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.leader = None;
     persistent.term += 1;
     volatile.voted_for = Some(persistent.id.clone());
+
+    info!(
+        "Node_{}:{} switched to candidate",
+        volatile.id.host, volatile.id.port
+    );
 
     let last_log_index = persistent.entries.last_index();
     let last_log_term = persistent.entries.last_term();
