@@ -24,6 +24,20 @@ pub enum Connectivity {
     Offline,
 }
 
+impl Connectivity {
+    pub fn is_offline(&self) -> bool {
+        if let Connectivity::Offline = self {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn is_online(&self) -> bool {
+        !self.is_offline()
+    }
+}
+
 struct Proc {
     id: Uuid,
     host: String,
@@ -396,6 +410,7 @@ fn spawn_healthcheck_process(
 ) {
     handle.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        let mut state = Connectivity::Offline;
 
         loop {
             ticker.tick().await;
@@ -416,22 +431,28 @@ fn spawn_healthcheck_process(
                         "node_{}:{} error when requesting status: {}",
                         inner.host, inner.port, e
                     );
-                    let _ = mailbox.send(ReplEvent::warn(format!(
-                        "Node {} connection error: {}",
-                        node,
-                        e.message(),
-                    )));
 
-                    let _ = mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
+                    if state.is_online() {
+                        let _ = mailbox.send(ReplEvent::warn(format!(
+                            "Node {} connection error: {}",
+                            node,
+                            e.message(),
+                        )));
+
+                        let _ =
+                            mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
+                        state = Connectivity::Offline;
+                    }
                 }
 
                 Ok(resp) => {
                     let resp = resp.into_inner();
                     info!("node_{}:{} status = {:?}", inner.host, inner.port, resp);
-                    let _ = mailbox.send(ReplEvent::node_connectivity(
-                        node,
-                        Connectivity::Online(resp),
-                    ));
+
+                    if state.is_offline() {
+                        state = Connectivity::Online(resp);
+                        let _ = mailbox.send(ReplEvent::node_connectivity(node, state.clone()));
+                    }
                 }
             }
         }
