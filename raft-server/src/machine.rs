@@ -397,7 +397,10 @@ fn state_machine(
 
     loop {
         let msg = mailbox.recv().unwrap();
-        info!("node_{}:{} received {:?}", node_id.host, node_id.port, msg);
+        info!(
+            "node_{}:{} [term={}] received {:?}",
+            node_id.host, node_id.port, persistent.term, msg
+        );
 
         match msg {
             Msg::RequestVote {
@@ -573,13 +576,14 @@ pub fn on_vote_received(
     granted: bool,
 ) {
     // Probably out-of-order message.
-    if persistent.term < term {
+    if persistent.term > term || volatile.status == Status::Leader {
         return;
     }
 
-    if persistent.term > term {
+    if persistent.term < term {
+        persistent.term = term;
         volatile.status = Status::Follower;
-        volatile.leader = Some(node_id);
+        volatile.leader = Some(node_id.clone());
         volatile.election_timeout_range.pick_timeout_value();
         volatile.election_timeout = Instant::now();
         volatile.voted_for = None;
@@ -587,8 +591,8 @@ pub fn on_vote_received(
         volatile.match_index.clear();
 
         info!(
-            "Node_{}:{} switched to follower because received an higher term from vote request",
-            volatile.id.host, volatile.id.port
+            "Node_{}:{} switched to follower because received an higher term from vote for {}:{}",
+            volatile.id.host, volatile.id.port, node_id.host, node_id.port,
         );
         return;
     }
@@ -671,31 +675,36 @@ pub fn on_request_vote(
     last_log_term: u64,
 ) -> (u64, bool) {
     if persistent.term > term {
-        return (0, false);
+        return (persistent.term, false);
     }
 
-    if let Some(id) = volatile.voted_for.clone() {
-        return (
-            persistent.term,
-            id == candidate_id && persistent.entries.last_index() <= last_log_index,
-        );
-    } else {
+    if persistent.term < term || volatile.voted_for.is_none() {
+        persistent.term = term;
+        let mut granted = false;
+
         if persistent.entries.last_index() <= last_log_index
             && persistent.entries.last_term() <= last_log_term
         {
             volatile.voted_for = Some(candidate_id);
             volatile.status = Status::Follower;
-            persistent.term = term;
             info!(
                 "Node_{}:{} switch to follower because received a valid vote request",
                 volatile.id.host, volatile.id.port
             );
 
-            return (term, true);
+            granted = true;
         }
 
-        (0, false)
+        return (persistent.term, granted);
     }
+
+    // When current term and term are equal, we check that the candidate matches and we have common history.
+    (
+        persistent.term,
+        volatile.voted_for == Some(candidate_id)
+            && persistent.entries.last_index() <= last_log_index
+            && persistent.entries.last_term() <= last_log_term,
+    )
 }
 
 pub fn on_append_entries_resp(
@@ -806,10 +815,11 @@ fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.leader = None;
     persistent.term += 1;
     volatile.voted_for = Some(persistent.id.clone());
+    volatile.election_timeout_range.pick_timeout_value();
 
     info!(
-        "Node_{}:{} switched to candidate",
-        volatile.id.host, volatile.id.port
+        "Node_{}:{} switched to candidate with election timeout {:?}",
+        volatile.id.host, volatile.id.port, volatile.election_timeout_range.duration
     );
 
     let last_log_index = persistent.entries.last_index();
