@@ -36,6 +36,13 @@ impl Connectivity {
     pub fn is_online(&self) -> bool {
         !self.is_offline()
     }
+
+    pub fn status(&self) -> Option<String> {
+        match self {
+            Connectivity::Online(r) => Some(r.status.clone()),
+            Connectivity::Offline => None,
+        }
+    }
 }
 
 struct Proc {
@@ -449,7 +456,7 @@ fn spawn_healthcheck_process(
                     let resp = resp.into_inner();
                     info!("node_{}:{} status = {:?}", inner.host, inner.port, resp);
 
-                    if state.is_offline() {
+                    if state.is_offline() || state.status() != Some(resp.status.clone()) {
                         state = Connectivity::Online(resp);
                         let _ = mailbox.send(ReplEvent::node_connectivity(node, state.clone()));
                     }

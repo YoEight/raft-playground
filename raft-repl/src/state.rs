@@ -275,16 +275,19 @@ impl State {
     }
 
     pub fn on_node_connectivity_changed(&mut self, event: NodeConnectivityEvent) {
-        let status = match event.connectivity {
-            Connectivity::Online(_) => "online",
-            Connectivity::Offline => "offline",
+        let status = match event.connectivity.clone() {
+            Connectivity::Online(r) => match r.status.as_str() {
+                "candidate" => Span::raw(r.status).style(Style::default().fg(Color::Yellow)),
+                _ => Span::raw(r.status).style(Style::default().fg(Color::Green)),
+            },
+            Connectivity::Offline => Span::raw("offline").style(Style::default().fg(Color::Red)),
         };
 
         self.nodes[event.node].set_connectivity(event.connectivity);
-        self.push_event(
-            Color::default(),
-            format!("Node {} is {}", event.node, status),
-        );
+        self.push_event_line(Line::from(vec![
+            Span::raw(format!("Node {} is ", event.node)),
+            status,
+        ]));
     }
 
     pub fn on_node_stream_read(&mut self, event: StreamRead) {
@@ -404,6 +407,10 @@ impl State {
             ))
             .style(Style::default().fg(color)),
         );
+    }
+
+    fn push_event_line(&mut self, line: Line<'static>) {
+        self.events.push(ListItem::new(line));
     }
 
     fn push_notification(&mut self, event: Notification) {
