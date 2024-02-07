@@ -71,7 +71,7 @@ impl Node {
             .parse()
             .unwrap();
         let client = self.client.clone();
-        let mut ticking = tokio::time::interval(Duration::from_millis(5));
+        let mut ticking = tokio::time::interval(Duration::from_millis(100));
 
         self.runtime.spawn(async move {
             loop {

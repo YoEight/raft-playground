@@ -23,15 +23,23 @@ use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 use tracing_appender::rolling;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::Registry;
 
 fn main() -> eyre::Result<()> {
-    let logs = rolling::daily("./logs", "repl.txt");
-    tracing_subscriber::fmt()
+    let console_layer = console_subscriber::spawn();
+    let logs = rolling::daily("./logs", "repl.txt").with_filter(|m| m.target().starts_with("raft"));
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_file(true)
         .with_ansi(false)
-        .with_writer(logs)
-        .init();
+        .with_writer(logs);
+
     let (sender, mailbox) = mpsc::channel();
+    let subscriber = Registry::default().with(console_layer).with(fmt_layer);
+
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 
     input_process(sender.clone());
     enable_raw_mode()?;

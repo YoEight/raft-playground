@@ -418,6 +418,7 @@ fn spawn_healthcheck_process(
     handle.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         let mut state = Connectivity::Offline;
+        let mut last_term = 0;
 
         loop {
             ticker.tick().await;
@@ -456,7 +457,11 @@ fn spawn_healthcheck_process(
                     let resp = resp.into_inner();
                     info!("node_{}:{} status = {:?}", inner.host, inner.port, resp);
 
-                    if state.is_offline() || state.status() != Some(resp.status.clone()) {
+                    if state.is_offline()
+                        || last_term != resp.term
+                        || state.status() != Some(resp.status.clone())
+                    {
+                        last_term = resp.term;
                         state = Connectivity::Online(resp);
                         let _ = mailbox.send(ReplEvent::node_connectivity(node, state.clone()));
                     }

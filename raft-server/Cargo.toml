@@ -18,7 +18,7 @@ tracing-appender = "0.2"
 tracing-subscriber = "0.3"
 
 [dependencies.tokio]
-version = "1.32"
+version = "1"
 features = ["full"]
 
 [dependencies.raft-common]
