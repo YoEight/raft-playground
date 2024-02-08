@@ -8,8 +8,10 @@ use names::Generator;
 use raft_common::client::ApiClient;
 use raft_common::{AppendReq, ReadReq, StatusResp};
 use raft_server::options::Options;
+use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
+use tokio::process::{Child, Command};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tonic::body::BoxBody;
@@ -56,6 +58,7 @@ struct Proc {
 enum ProcKind {
     Managed(raft_server::Node),
     External(ExternalProc),
+    Spawn(Child),
 }
 
 impl ProcKind {
@@ -65,6 +68,10 @@ impl ProcKind {
 
     fn external() -> Self {
         Self::External(ExternalProc)
+    }
+
+    fn spawn(child: Child) -> Self {
+        Self::Spawn(child)
     }
 }
 
@@ -213,15 +220,7 @@ impl Node {
 
         let handle = self.handle.clone();
         self.handle.spawn(async move {
-            let node = raft_server::Node::new(
-                handle.clone(),
-                Options {
-                    port: port as u16,
-                    seeds,
-                },
-            );
-
-            match node {
+            match spawn_compiled_node(&handle, port as u16, seeds) {
                 Err(e) => {
                     error!("node_{}:{} error when starting: {}", "localhost", port, e);
                     let _ = mailbox.send(ReplEvent::error(format!(
@@ -230,7 +229,7 @@ impl Node {
                     )));
                 }
 
-                Ok(mut node) => {
+                Ok(kind) => {
                     let mut proc = proc_ref.lock().await;
                     let mut connector = HttpConnector::new();
 
@@ -241,14 +240,12 @@ impl Node {
                     let api_client = ApiClient::with_origin(client, uri);
                     let id = Uuid::new_v4();
 
-                    node.start();
-
                     *proc = Some(Proc {
                         id,
                         port: port as u16,
                         host: "localhost".to_string(),
                         api_client: api_client.clone(),
-                        kind: ProcKind::managed(node),
+                        kind,
                     });
 
                     info!("node_{}:{} started", "localhost", port);
@@ -398,14 +395,58 @@ impl Node {
             let mut proc = self.proc.lock().await;
 
             if let Some(proc) = proc.take() {
-                if let ProcKind::Managed(mut managed) = proc.kind {
-                    if let Some(join) = managed.join.take() {
-                        join.abort();
+                match proc.kind {
+                    ProcKind::Managed(mut managed) => {
+                        if let Some(join) = managed.join.take() {
+                            join.abort();
+                        }
                     }
+
+                    ProcKind::Spawn(mut child) => {
+                        let _ = child.kill();
+                    }
+
+                    _ => {}
                 }
             }
         });
     }
+}
+
+fn spawn_managed_node(handle: &Handle, port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
+    let mut node = raft_server::Node::new(
+        handle.clone(),
+        Options {
+            port: port as u16,
+            seeds,
+        },
+    )?;
+
+    node.start();
+
+    Ok(ProcKind::managed(node))
+}
+
+fn spawn_compiled_node(handle: &Handle, port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
+    let seeds = seeds
+        .iter()
+        .copied()
+        .flat_map(|p| vec!["--seed".to_string(), p.to_string()])
+        .collect::<Vec<_>>();
+
+    let child = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("raft-server")
+        .arg("--")
+        .arg("--port")
+        .arg(port.to_string())
+        .args(seeds)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    Ok(ProcKind::spawn(child))
 }
 
 fn spawn_healthcheck_process(
