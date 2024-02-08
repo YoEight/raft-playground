@@ -2,8 +2,10 @@ use crate::machine::{AppendEntriesResp, NodeClient};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
+use std::time::Instant;
 use tokio::runtime::Handle;
 use tonic::Request;
+use tracing::info;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
@@ -72,10 +74,11 @@ impl Seed {
         let node_id = self.id.clone();
         let node_client = self.mailbox.clone();
         self.runtime.spawn(async move {
+            let stopwatch = Instant::now();
             let resp = client
                 .append_entries(Request::new(EntriesReq {
                     term,
-                    leader_id: Some(leader_id),
+                    leader_id: Some(leader_id.clone()),
                     prev_log_index,
                     prev_log_term,
                     leader_commit,
@@ -89,6 +92,16 @@ impl Seed {
                         success: resp.success,
                     }
                 });
+
+            info!(
+                "node_{}:{} [term={}] Sending append_entries rpc to {}:{} took {:?}",
+                leader_id.host,
+                leader_id.port,
+                term,
+                node_id.host,
+                node_id.port,
+                stopwatch.elapsed()
+            );
 
             node_client.append_entries_response_received(
                 node_id,

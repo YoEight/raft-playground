@@ -32,7 +32,7 @@ fn main() -> eyre::Result<()> {
     let logs = rolling::daily("./logs", "repl.txt").with_filter(|m| m.target().starts_with("raft"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_file(true)
+        .with_file(false)
         .with_ansi(false)
         .with_writer(logs);
 

@@ -581,6 +581,7 @@ pub fn on_vote_received(
     }
 
     if persistent.term < term {
+        let prev_term = persistent.term;
         persistent.term = term;
         volatile.status = Status::Follower;
         volatile.leader = Some(node_id.clone());
@@ -591,8 +592,8 @@ pub fn on_vote_received(
         volatile.match_index.clear();
 
         info!(
-            "Node_{}:{} switched to follower because received an higher term from vote for {}:{}",
-            volatile.id.host, volatile.id.port, node_id.host, node_id.port,
+            "Node_{}:{} [term={}]switched to follower because received an higher [term={}] from vote for {}:{}",
+            volatile.id.host, volatile.id.port, prev_term, term, node_id.host, node_id.port,
         );
         return;
     }
@@ -621,6 +622,8 @@ pub fn on_append_entries(
         return (persistent.term, false);
     }
 
+    let prev_term = persistent.term;
+
     if persistent.term < term {
         volatile.voted_for = None;
         persistent.term = term;
@@ -635,8 +638,8 @@ pub fn on_append_entries(
     volatile.leader = Some(leader_id);
 
     info!(
-        "Node_{}:{} as follower because received a valid replication request",
-        volatile.id.host, volatile.id.port
+        "Node_{}:{} [term={}] is a follower because received a valid replication request -> [term={}]",
+        volatile.id.host, volatile.id.port, prev_term, term
     );
     // Current node doesn't have that point of reference from this index position.
     if !persistent
@@ -780,12 +783,47 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.reset();
 
     info!(
-        "Node_{}:{} switched to leader",
-        volatile.id.host, volatile.id.port
+        "Node_{}:{} [term={}] switched to leader",
+        volatile.id.host, volatile.id.port, persistent.term
+    );
+
+    // Send heartbeat request to assert dominance.
+    send_append_entries(persistent, volatile);
+}
+
+fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
+    let prev_term = persistent.term;
+    volatile.status = Status::Candidate;
+    volatile.leader = None;
+    persistent.term += 1;
+    volatile.voted_for = Some(persistent.id.clone());
+    volatile.election_timeout_range.pick_timeout_value();
+
+    info!(
+        "Node_{}:{} [term={}] switched to candidate with election timeout {:?} -> term {}",
+        volatile.id.host,
+        volatile.id.port,
+        prev_term,
+        volatile.election_timeout_range.duration,
+        persistent.term,
     );
 
     let last_log_index = persistent.entries.last_index();
-    // Send heartbeat request to assert dominance.
+    let last_log_term = persistent.entries.last_term();
+
+    for seed in &volatile.seeds {
+        seed.request_vote(
+            persistent.term,
+            volatile.id.clone(),
+            last_log_index,
+            last_log_term,
+        );
+    }
+}
+
+pub fn send_append_entries(persistent: &mut Persistent, volatile: &mut Volatile) {
+    let last_log_index = persistent.entries.last_index();
+
     for seed in volatile.seeds.clone() {
         volatile
             .next_index
@@ -808,31 +846,8 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
             entries,
         );
     }
-}
 
-fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
-    volatile.status = Status::Candidate;
-    volatile.leader = None;
-    persistent.term += 1;
-    volatile.voted_for = Some(persistent.id.clone());
-    volatile.election_timeout_range.pick_timeout_value();
-
-    info!(
-        "Node_{}:{} switched to candidate with election timeout {:?}",
-        volatile.id.host, volatile.id.port, volatile.election_timeout_range.duration
-    );
-
-    let last_log_index = persistent.entries.last_index();
-    let last_log_term = persistent.entries.last_term();
-
-    for seed in &volatile.seeds {
-        seed.request_vote(
-            persistent.term,
-            volatile.id.clone(),
-            last_log_index,
-            last_log_term,
-        );
-    }
+    volatile.heartbeat_timeout = Instant::now();
 }
 
 pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
@@ -841,27 +856,18 @@ pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
         return;
     }
 
+    // Note: I think the make reason we keep having cluster stability issues is because of the heartbeat delay that
+    // might not be short enough (based on the election timeout) causing followers to switch to candidate too often.
     if volatile.heartbeat_timeout.elapsed() >= HEARTBEAT_DELAY && volatile.status == Status::Leader
     {
-        for seed in volatile.seeds.clone() {
-            let (prev_log_index, prev_log_term) =
-                find_known_reference_point(persistent, volatile, seed.id.clone());
+        info!(
+            "node_{}:{} Actual heartbeat delay: {:?}",
+            volatile.id.host,
+            volatile.id.port,
+            volatile.heartbeat_timeout.elapsed()
+        );
 
-            let entries = persistent
-                .entries
-                .read_entries_from(prev_log_index + 1, 500);
-
-            seed.send_append_entries(
-                persistent.term,
-                volatile.id.clone(),
-                prev_log_index,
-                prev_log_term,
-                persistent.commit_index,
-                entries,
-            );
-        }
-
-        volatile.heartbeat_timeout = Instant::now();
+        send_append_entries(persistent, volatile);
         return;
     }
 

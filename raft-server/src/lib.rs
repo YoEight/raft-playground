@@ -71,11 +71,10 @@ impl Node {
             .parse()
             .unwrap();
         let client = self.client.clone();
-        let mut ticking = tokio::time::interval(Duration::from_millis(100));
 
         self.runtime.spawn(async move {
             loop {
-                ticking.tick().await;
+                tokio::time::sleep(Duration::from_millis(30)).await;
                 if !client.tick() {
                     break;
                 }
