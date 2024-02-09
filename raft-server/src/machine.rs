@@ -2,18 +2,21 @@ use crate::entry::{Entries, RecordedEvent};
 use crate::seed::Seed;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use eyre::bail;
-use raft_common::{Entry, NodeId};
+use raft_common::client::RaftClient;
+use raft_common::{EntriesReq, Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tracing::info;
+use tonic::Request;
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -47,6 +50,7 @@ pub enum Msg {
         node_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
+        batch_end_log_index: u64,
         resp: tonic::Result<AppendEntriesResp>,
     },
 
@@ -64,8 +68,6 @@ pub enum Msg {
     Status {
         resp: oneshot::Sender<StatusResp>,
     },
-
-    Tick,
 }
 
 #[derive(Debug)]
@@ -360,21 +362,20 @@ impl NodeClient {
 
     pub fn append_entries_response_received(
         &self,
+        corr: Uuid,
         node_id: NodeId,
         prev_log_index: u64,
         prev_log_term: u64,
+        batch_end_log_index: u64,
         resp: Result<AppendEntriesResp, tonic::Status>,
     ) {
         let _ = self.sender.send(Msg::AppendEntriesResp {
             node_id,
             prev_log_index,
             prev_log_term,
+            batch_end_log_index,
             resp,
         });
-    }
-
-    pub fn tick(&self) -> bool {
-        self.sender.send(Msg::Tick).is_ok()
     }
 }
 
@@ -387,6 +388,74 @@ pub fn start(
     thread::spawn(move || state_machine(persistent, node_id, seeds, recv))
 }
 
+struct NodeReq {
+    node: NodeId,
+    req: EntriesReq,
+}
+
+// async fn gossip_process(
+//     node_id: NodeId,
+//     seeds: Vec<Seed>,
+//     node_client: NodeClient,
+//     mut receiver: tokio::sync::mpsc::UnboundedReceiver<NodeReq>,
+// ) {
+//     let mut seed_clients = HashMap::new();
+//
+//     for seed in seeds {
+//         let uri = hyper::Uri::from_maybe_shared(format!(
+//             "http://{}:{}",
+//             seed.id.host.as_str(),
+//             seed.id.port
+//         ))
+//         .unwrap();
+//         let hyper_client = hyper::Client::builder().http2_only(true).build_http();
+//         let seed_client = RaftClient::with_origin(hyper_client, uri);
+//         seed_clients.insert(seed.id, seed_client);
+//     }
+//
+//     while let Some(req) = receiver.recv().await {
+//         if let Some(client) = seed_clients.get_mut(&req.node) {
+//             let term = req.req.term;
+//
+//             match tokio::time::timeout(
+//                 HEARTBEAT_DELAY * 2,
+//                 client.append_entries(Request::new(req.req)),
+//             )
+//             .await
+//             {
+//                 Err(_) => {
+//                     warn!(
+//                         "node_{}:{} node {}:{} has timeout when sending append entries rpc",
+//                         node_id.host, node_id.port, req.node.host, req.node.port
+//                     );
+//                 }
+//
+//                 Ok(res) => match res {
+//                     Err(e) => {
+//                         error!(
+//                             "node_{}:{} node {}:{} append entries rpc failed: {}",
+//                             node_id.host, node_id.port, req.node.host, req.node.port, e
+//                         );
+//                     }
+//
+//                     Ok(resp) => node_client.append_entries_response_received(
+//                         Uuid::new_v4(),
+//                         req.node,
+//                         prev_log_index,
+//                         prev_log_term,
+//                         resp,
+//                     ),
+//                 },
+//             }
+//         } else {
+//             warn!(
+//                 "node_{}:{} [term={}] node {}:{} is unknown",
+//                 node_id.host, node_id.port, req.req.term, req.node.host, req.node.port
+//             );
+//         }
+//     }
+// }
+
 fn state_machine(
     mut persistent: Persistent,
     node_id: NodeId,
@@ -394,9 +463,38 @@ fn state_machine(
     mailbox: Receiver<Msg>,
 ) {
     let mut volatile = Volatile::new(node_id.clone(), seeds);
+    let mut tick_tracker = Instant::now();
 
     loop {
-        let msg = mailbox.recv().unwrap();
+        let elapsed = tick_tracker.elapsed();
+        if tick_tracker.elapsed() >= HEARTBEAT_DELAY {
+            info!(
+                "node_{}:{} [term={}] Tick tracker elapsed {:?}",
+                node_id.host, node_id.port, persistent.term, elapsed
+            );
+            on_tick(&mut persistent, &mut volatile);
+            tick_tracker = Instant::now();
+        }
+
+        let msg = match mailbox.recv_timeout(HEARTBEAT_DELAY) {
+            Ok(msg) => msg,
+            Err(e) => match e {
+                RecvTimeoutError::Disconnected => return,
+                RecvTimeoutError::Timeout => {
+                    info!(
+                        "node_{}:{} [term={}] Tick tracker elapsed {:?}",
+                        node_id.host,
+                        node_id.port,
+                        persistent.term,
+                        tick_tracker.elapsed()
+                    );
+                    on_tick(&mut persistent, &mut volatile);
+                    tick_tracker = Instant::now();
+                    continue;
+                }
+            },
+        };
+
         info!(
             "node_{}:{} [term={}] received {:?}",
             node_id.host, node_id.port, persistent.term, msg
@@ -453,14 +551,11 @@ fn state_machine(
                 on_vote_received(&mut persistent, &mut volatile, node_id, term, granted);
             }
 
-            Msg::Tick => {
-                on_tick(&mut persistent, &mut volatile);
-            }
-
             Msg::AppendEntriesResp {
                 node_id,
                 prev_log_index,
                 prev_log_term,
+                batch_end_log_index,
                 resp,
             } => on_append_entries_resp(
                 &mut persistent,
@@ -468,6 +563,7 @@ fn state_machine(
                 node_id,
                 prev_log_index,
                 prev_log_term,
+                batch_end_log_index,
                 resp,
             ),
             Msg::AppendStream {
@@ -716,6 +812,7 @@ pub fn on_append_entries_resp(
     node_id: NodeId,
     prev_log_index: u64,
     prev_log_term: u64,
+    batch_end_log_index: u64,
     resp: tonic::Result<AppendEntriesResp>,
 ) {
     if volatile.status != Status::Leader {
@@ -723,58 +820,23 @@ pub fn on_append_entries_resp(
     }
 
     if let Ok(resp) = resp {
-        if !resp.success {
+        if resp.success {
+            // We node that node successfully replicated to that point.
+            *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
+        }
+        else {
             // In this case we decrease what we thought was the next entry index of the follower
             // node. From there we find the previous entry to this index and pass it as a point of
             // reference to maintain log consistency.
             let next_index = volatile.next_index.get_mut(&node_id).unwrap();
             *next_index = next_index.saturating_sub(1);
+        } 
 
-            let (prev_log_index, prev_log_term) =
-                persistent.entries.get_previous_entry(*next_index);
-            let entries = persistent
-                .entries
-                .read_entries_from(prev_log_index + 1, 500);
-            let seed = volatile.node(&node_id);
-
-            seed.send_append_entries(
-                persistent.term,
-                volatile.id.clone(),
-                prev_log_index,
-                prev_log_term,
-                persistent.commit_index,
-                entries,
-            );
-
-            return;
-        }
-    } else {
-        // In that case we just keep retrying because it means the follower was not reachable.
-        let seed = volatile.node(&node_id);
-        let entries = persistent
-            .entries
-            .read_entries_from(prev_log_index + 1, 500);
-
-        seed.send_append_entries(
-            persistent.term,
-            volatile.id.clone(),
-            prev_log_index,
-            prev_log_term,
-            persistent.commit_index,
-            entries,
-        );
+        return;
     }
-}
 
-fn find_known_reference_point(
-    persistent: &mut Persistent,
-    volatile: &mut Volatile,
-    node_id: NodeId,
-) -> (u64, u64) {
-    let prev_log_index = *volatile.match_index.entry(node_id).or_insert(0);
-    let prev_log_term = persistent.entries.entry_term(prev_log_index);
-
-    (prev_log_index, prev_log_term)
+    // In that case, the next tick will retry at the same next_match position of the log
+    // because it appears the node is not reachable.
 }
 
 fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
@@ -825,13 +887,12 @@ pub fn send_append_entries(persistent: &mut Persistent, volatile: &mut Volatile)
     let last_log_index = persistent.entries.last_index();
 
     for seed in volatile.seeds.clone() {
-        volatile
+        let next_index = volatile
             .next_index
             .entry(seed.id.clone())
             .or_insert(last_log_index + 1);
 
-        let (prev_log_index, prev_log_term) =
-            find_known_reference_point(persistent, volatile, seed.id.clone());
+        let (prev_log_index, prev_log_term) = persistent.entries.get_previous_entry(*next_index);
 
         let entries = persistent
             .entries
@@ -858,8 +919,7 @@ pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
 
     // Note: I think the make reason we keep having cluster stability issues is because of the heartbeat delay that
     // might not be short enough (based on the election timeout) causing followers to switch to candidate too often.
-    if volatile.heartbeat_timeout.elapsed() >= HEARTBEAT_DELAY && volatile.status == Status::Leader
-    {
+    if volatile.status == Status::Leader {
         info!(
             "node_{}:{} Actual heartbeat delay: {:?}",
             volatile.id.host,
@@ -868,11 +928,7 @@ pub fn on_tick(persistent: &mut Persistent, volatile: &mut Volatile) {
         );
 
         send_append_entries(persistent, volatile);
-        return;
-    }
-
-    if volatile.election_timeout() && volatile.status != Status::Leader {
+    } else if volatile.election_timeout() {
         switch_to_candidate(persistent, volatile);
-        return;
     }
 }

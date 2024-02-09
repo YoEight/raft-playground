@@ -58,16 +58,16 @@ impl Entries {
         self.last_term
     }
 
-    pub fn entry_term(&self, index: u64) -> u64 {
+    pub fn entry_term(&self, index: u64) -> Option<u64> {
         for entry in &self.inner {
             if entry.index != index {
                 continue;
             }
 
-            return entry.term;
+            return Some(entry.term);
         }
 
-        0
+        None
     }
 
     pub fn get_previous_entry(&self, ref_index: u64) -> (u64, u64) {

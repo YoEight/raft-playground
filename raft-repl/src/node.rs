@@ -220,7 +220,7 @@ impl Node {
 
         let handle = self.handle.clone();
         self.handle.spawn(async move {
-            match spawn_compiled_node(&handle, port as u16, seeds) {
+            match spawn_managed_node(&handle, port as u16, seeds) {
                 Err(e) => {
                     error!("node_{}:{} error when starting: {}", "localhost", port, e);
                     let _ = mailbox.send(ReplEvent::error(format!(
@@ -427,7 +427,7 @@ fn spawn_managed_node(handle: &Handle, port: u16, seeds: Vec<u16>) -> eyre::Resu
     Ok(ProcKind::managed(node))
 }
 
-fn spawn_compiled_node(handle: &Handle, port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
+fn spawn_compiled_node(port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
     let seeds = seeds
         .iter()
         .copied()

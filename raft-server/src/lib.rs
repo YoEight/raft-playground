@@ -1,4 +1,4 @@
-use std::{sync::mpsc, thread, time::Duration};
+use std::{sync::mpsc, thread};
 use tokio::runtime::Handle;
 
 use grpc::{ApiImpl, RaftImpl};
@@ -70,16 +70,6 @@ impl Node {
         let addr = format!("{}:{}", self.id.host, self.id.port)
             .parse()
             .unwrap();
-        let client = self.client.clone();
-
-        self.runtime.spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(30)).await;
-                if !client.tick() {
-                    break;
-                }
-            }
-        });
 
         // println!("Listening on {}:{}", self.id.host, self.id.port);
         let client = self.client.clone();
