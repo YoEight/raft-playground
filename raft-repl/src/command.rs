@@ -16,6 +16,7 @@ pub enum Command {
     Spawn(Spawn),
     Stop(Stop),
     Start(Start),
+    Restart(Restart),
     AppendToStream(AppendToStream),
     ReadStream(ReadStream),
     /// Ping a server node.
@@ -47,6 +48,13 @@ pub struct Start {
 
     #[arg(long)]
     pub port: Option<usize>,
+}
+
+#[derive(Args, Debug, Clone)]
+/// Restarts a node
+pub struct Restart {
+    #[arg(long)]
+    pub node: usize,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -15,7 +15,7 @@ use tonic::Request;
 use tui_textarea::{CursorMove, Input, Key, TextArea};
 
 use crate::command::{
-    AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Spawn, Start, Stop,
+    AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Restart, Spawn, Start, Stop,
 };
 use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent, StreamRead};
 use crate::history::History;
@@ -214,54 +214,28 @@ impl State {
                     self.popup.set_text(to_text(e.to_string()));
                 }
 
-                Ok(cmd) => match cmd.command {
-                    Command::Quit | Command::Exit => {
-                        self.cleanup();
-                        return false;
-                    }
-
-                    Command::Spawn(args) => {
-                        if let Err(e) = self.spawn_cluster(args) {
-                            self.popup.shown = true;
-                            self.popup.set_title("Error");
-                            self.popup.set_text(to_text(e.to_string()));
+                Ok(cmd) => {
+                    let result = match cmd.command {
+                        Command::Exit | Command::Quit => {
+                            self.cleanup();
+                            return false;
                         }
-                    }
 
-                    Command::Stop(args) => {
-                        if let Err(e) = self.stop_node(args) {
-                            self.popup.shown = true;
-                            self.popup.set_title("Error");
-                            self.popup.set_text(to_text(e.to_string()));
-                        }
-                    }
+                        Command::Spawn(args) => self.spawn_cluster(args),
+                        Command::Stop(args) => self.stop_node(args),
+                        Command::Start(args) => self.start_node(args),
+                        Command::Restart(args) => self.restart_node(args),
+                        Command::AppendToStream(args) => self.append_to_stream(args),
+                        Command::ReadStream(args) => self.read_stream(args),
+                        Command::Ping(args) => self.ping_node(args),
+                    };
 
-                    Command::Start(args) => {
-                        if let Err(e) = self.start_node(args) {
-                            self.popup.shown = true;
-                            self.popup.set_title("Error");
-                            self.popup.set_text(to_text(e.to_string()));
-                        }
+                    if let Err(e) = result {
+                        self.popup.shown = true;
+                        self.popup.set_title("Error");
+                        self.popup.set_text(to_text(e.to_string()));
                     }
-
-                    Command::AppendToStream(args) => {
-                        if let Err(e) = self.append_to_stream(args) {
-                            self.popup.shown = true;
-                            self.popup.set_title("Error");
-                            self.popup.set_text(to_text(e.to_string()));
-                        }
-                    }
-
-                    Command::ReadStream(args) => {
-                        if let Err(e) = self.read_stream(args) {
-                            self.popup.shown = true;
-                            self.popup.set_title("Error");
-                            self.popup.set_text(to_text(e.to_string()));
-                        }
-                    }
-
-                    Command::Ping(args) => self.ping_node(args),
-                },
+                }
             }
         }
 
@@ -375,6 +349,16 @@ impl State {
         Ok(())
     }
 
+    fn restart_node(&mut self, args: Restart) -> eyre::Result<()> {
+        if let Some(node) = self.nodes.get_mut(args.node) {
+            node.stop();
+            node.start();
+            return Ok(());
+        }
+
+        eyre::bail!("Node {} doesn't exist", args.node);
+    }
+
     fn append_to_stream(&mut self, args: AppendToStream) -> eyre::Result<()> {
         if args.node >= self.nodes.len() {
             eyre::bail!("Node {} doesn't exist", args.node);
@@ -423,7 +407,7 @@ impl State {
         self.push_event(color, event.msg);
     }
 
-    fn ping_node(&mut self, args: Ping) {
+    fn ping_node(&mut self, args: Ping) -> eyre::Result<()> {
         match args.command {
             PingCommand::Node(args) => {
                 if let Some(node) = self.nodes.get(args.node) {
@@ -465,6 +449,8 @@ impl State {
                 });
             }
         }
+
+        Ok(())
     }
 
     fn cleanup(&mut self) {

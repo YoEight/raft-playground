@@ -6,14 +6,16 @@ use hyper::client::HttpConnector;
 use hyper::Client;
 use names::Generator;
 use raft_common::client::ApiClient;
-use raft_common::{AppendReq, ReadReq, StatusResp};
+use raft_common::{AppendReq, NodeId, ReadReq, StatusResp};
 use raft_server::options::Options;
 use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::runtime::Handle;
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tonic::body::BoxBody;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::Request;
@@ -258,6 +260,21 @@ impl Node {
         });
     }
 
+    pub fn restart(&self) {
+        /*let proc_ref = self.proc.clone();
+        self.handle.spawn(async move {
+            let mut proc = proc_ref.lock().await;
+
+            if let Some(proc) = proc.as_mut() {
+                match proc.kind {
+                    ProcKind::Managed(_) => {}
+                    ProcKind::External(_) => {}
+                    ProcKind::Spawn(_) => {}
+                }
+            }
+        });*/
+    }
+
     pub fn ping(&self) {
         let node_id = self.idx;
         let mailbox = self.mailbox.clone();
@@ -450,6 +467,134 @@ fn spawn_compiled_node(port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
         .spawn()?;
 
     Ok(ProcKind::spawn(child))
+}
+
+enum NodeCmd {
+    AppendStream {
+        stream_name: String,
+        events: Vec<Bytes>,
+    },
+    ReadStream {
+        stream_name: String,
+    },
+}
+
+async fn node_command_handler(
+    node: usize,
+    port: u16,
+    mailbox: UnboundedSender<ReplEvent>,
+    mut receiver: Receiver<NodeCmd>,
+) {
+    let mut connector = HttpConnector::new();
+    connector.enforce_http(false);
+    let client = hyper::Client::builder().http2_only(true).build(connector);
+    let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port)).unwrap();
+    let mut api_client = ApiClient::with_origin(client, uri);
+    let mut state = Connectivity::Offline;
+    let mut last_term = 0;
+
+    loop {
+        if let Ok(msg) = timeout(Duration::from_secs(1), receiver.recv()).await {
+            let msg = if let Some(msg) = msg {
+                msg
+            } else {
+                break;
+            };
+
+            match msg {
+                NodeCmd::AppendStream { .. } => {}
+                NodeCmd::ReadStream { stream_name } => {
+                    match api_client
+                        .read(Request::new(ReadReq {
+                            stream_id: stream_name.clone(),
+                        }))
+                        .await
+                    {
+                        Err(e) => {
+                            let _ = mailbox.send(ReplEvent::error(format!(
+                                "Reading stream '{}' from node {} caused an error: {}",
+                                stream_name,
+                                node,
+                                e.message()
+                            )));
+                        }
+                        Ok(stream) => {
+                            let mut events = Vec::new();
+                            let mut stream = stream.into_inner();
+
+                            loop {
+                                match stream.try_next().await {
+                                    Err(e) => {
+                                        let _ = mailbox.send(ReplEvent::error(format!(
+                                            "Reading stream '{}' from node {} caused an error: {}",
+                                            stream_name,
+                                            node,
+                                            e.message()
+                                        )));
+                                    }
+
+                                    Ok(resp) => {
+                                        if let Some(resp) = resp {
+                                            events.push(RecordedEvent {
+                                                stream_id: resp.stream_id,
+                                                global: resp.global,
+                                                revision: resp.revision,
+                                                payload: resp.payload,
+                                            });
+                                            continue;
+                                        }
+
+                                        break;
+                                    }
+                                }
+                            }
+
+                            let _ = mailbox.send(ReplEvent::msg(format!(
+                                "Reading stream '{}' from node {} was successful",
+                                stream_name, node
+                            )));
+                            let _ = mailbox.send(ReplEvent::stream_read(node, stream_name, events));
+                        }
+                    }
+                }
+            }
+        } else {
+            match api_client.status(Request::new(())).await {
+                Err(e) => {
+                    error!(
+                        "node_{}:{} error when requesting status: {}",
+                        "localhost", port, e
+                    );
+
+                    if state.is_online() {
+                        let _ = mailbox.send(ReplEvent::warn(format!(
+                            "Node {} connection error: {}",
+                            node,
+                            e.message(),
+                        )));
+
+                        let _ =
+                            mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
+                        state = Connectivity::Offline;
+                    }
+                }
+
+                Ok(resp) => {
+                    let resp = resp.into_inner();
+                    info!("node_{}:{} status = {:?}", "localhost", port, resp);
+
+                    if state.is_offline()
+                        || last_term != resp.term
+                        || state.status() != Some(resp.status.clone())
+                    {
+                        last_term = resp.term;
+                        state = Connectivity::Online(resp);
+                        let _ = mailbox.send(ReplEvent::node_connectivity(node, state.clone()));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn spawn_healthcheck_process(
