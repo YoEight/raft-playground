@@ -534,7 +534,7 @@ impl View {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Length(40)]);
+            .constraints([Constraint::Percentage(70), Constraint::Fill(1)]);
 
         Self {
             shell,
