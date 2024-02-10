@@ -58,6 +58,7 @@ struct Proc {
 enum ProcKind {
     Managed(raft_server::Node),
     External(ExternalProc),
+    #[allow(dead_code)]
     Spawn(Child),
 }
 
@@ -70,6 +71,7 @@ impl ProcKind {
         Self::External(ExternalProc)
     }
 
+    #[allow(dead_code)]
     fn spawn(child: Child) -> Self {
         Self::Spawn(child)
     }
@@ -427,6 +429,7 @@ fn spawn_managed_node(handle: &Handle, port: u16, seeds: Vec<u16>) -> eyre::Resu
     Ok(ProcKind::managed(node))
 }
 
+#[allow(dead_code)]
 fn spawn_compiled_node(port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
     let seeds = seeds
         .iter()

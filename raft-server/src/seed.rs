@@ -5,7 +5,7 @@ use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
 use std::time::Instant;
 use tokio::runtime::Handle;
 use tonic::Request;
-use tracing::info;
+use tracing::debug;
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
@@ -75,13 +75,12 @@ impl Seed {
         let node_client = self.mailbox.clone();
         self.runtime.spawn(async move {
             let stopwatch = Instant::now();
-            let corr = uuid::Uuid::new_v4();
             let batch_end_log_index = if let Some(last) = entries.last() {
                 last.index
             } else {
                 prev_log_index
             };
-            
+
             let resp = client
                 .append_entries(Request::new(EntriesReq {
                     term,
@@ -100,33 +99,25 @@ impl Seed {
                     }
                 });
 
-            info!(
-                "node_{}:{} [term={}] [corr={}] Sending append_entries rpc to {}:{} took {:?}",
+            debug!(
+                "node_{}:{} [term={}] Sending append_entries rpc to {}:{} took {:?}",
                 leader_id.host,
                 leader_id.port,
                 term,
-                corr,
                 node_id.host,
                 node_id.port,
                 stopwatch.elapsed()
             );
 
             node_client.append_entries_response_received(
-                corr,
                 node_id.clone(),
-                prev_log_index,
-                prev_log_term,
                 batch_end_log_index,
                 resp,
             );
 
-            info!(
+            debug!(
                 "node_{}:{} [term={}] append_entries response sent {}:{}",
-                leader_id.host,
-                leader_id.port,
-                term,
-                node_id.host,
-                node_id.port,
+                leader_id.host, leader_id.port, term, node_id.host, node_id.port,
             );
         });
     }

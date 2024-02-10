@@ -2,8 +2,7 @@ use crate::entry::{Entries, RecordedEvent};
 use crate::seed::Seed;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use eyre::bail;
-use raft_common::client::RaftClient;
-use raft_common::{EntriesReq, Entry, NodeId};
+use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -14,9 +13,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tonic::Request;
-use tracing::{error, info, warn};
-use uuid::Uuid;
+use tracing::info;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -48,8 +45,6 @@ pub enum Msg {
 
     AppendEntriesResp {
         node_id: NodeId,
-        prev_log_index: u64,
-        prev_log_term: u64,
         batch_end_log_index: u64,
         resp: tonic::Result<AppendEntriesResp>,
     },
@@ -362,17 +357,12 @@ impl NodeClient {
 
     pub fn append_entries_response_received(
         &self,
-        corr: Uuid,
         node_id: NodeId,
-        prev_log_index: u64,
-        prev_log_term: u64,
         batch_end_log_index: u64,
         resp: Result<AppendEntriesResp, tonic::Status>,
     ) {
         let _ = self.sender.send(Msg::AppendEntriesResp {
             node_id,
-            prev_log_index,
-            prev_log_term,
             batch_end_log_index,
             resp,
         });
@@ -387,74 +377,6 @@ pub fn start(
 ) -> JoinHandle<()> {
     thread::spawn(move || state_machine(persistent, node_id, seeds, recv))
 }
-
-struct NodeReq {
-    node: NodeId,
-    req: EntriesReq,
-}
-
-// async fn gossip_process(
-//     node_id: NodeId,
-//     seeds: Vec<Seed>,
-//     node_client: NodeClient,
-//     mut receiver: tokio::sync::mpsc::UnboundedReceiver<NodeReq>,
-// ) {
-//     let mut seed_clients = HashMap::new();
-//
-//     for seed in seeds {
-//         let uri = hyper::Uri::from_maybe_shared(format!(
-//             "http://{}:{}",
-//             seed.id.host.as_str(),
-//             seed.id.port
-//         ))
-//         .unwrap();
-//         let hyper_client = hyper::Client::builder().http2_only(true).build_http();
-//         let seed_client = RaftClient::with_origin(hyper_client, uri);
-//         seed_clients.insert(seed.id, seed_client);
-//     }
-//
-//     while let Some(req) = receiver.recv().await {
-//         if let Some(client) = seed_clients.get_mut(&req.node) {
-//             let term = req.req.term;
-//
-//             match tokio::time::timeout(
-//                 HEARTBEAT_DELAY * 2,
-//                 client.append_entries(Request::new(req.req)),
-//             )
-//             .await
-//             {
-//                 Err(_) => {
-//                     warn!(
-//                         "node_{}:{} node {}:{} has timeout when sending append entries rpc",
-//                         node_id.host, node_id.port, req.node.host, req.node.port
-//                     );
-//                 }
-//
-//                 Ok(res) => match res {
-//                     Err(e) => {
-//                         error!(
-//                             "node_{}:{} node {}:{} append entries rpc failed: {}",
-//                             node_id.host, node_id.port, req.node.host, req.node.port, e
-//                         );
-//                     }
-//
-//                     Ok(resp) => node_client.append_entries_response_received(
-//                         Uuid::new_v4(),
-//                         req.node,
-//                         prev_log_index,
-//                         prev_log_term,
-//                         resp,
-//                     ),
-//                 },
-//             }
-//         } else {
-//             warn!(
-//                 "node_{}:{} [term={}] node {}:{} is unknown",
-//                 node_id.host, node_id.port, req.req.term, req.node.host, req.node.port
-//             );
-//         }
-//     }
-// }
 
 fn state_machine(
     mut persistent: Persistent,
@@ -553,19 +475,9 @@ fn state_machine(
 
             Msg::AppendEntriesResp {
                 node_id,
-                prev_log_index,
-                prev_log_term,
                 batch_end_log_index,
                 resp,
-            } => on_append_entries_resp(
-                &mut persistent,
-                &mut volatile,
-                node_id,
-                prev_log_index,
-                prev_log_term,
-                batch_end_log_index,
-                resp,
-            ),
+            } => on_append_entries_resp(&mut volatile, node_id, batch_end_log_index, resp),
             Msg::AppendStream {
                 stream_id,
                 events,
@@ -807,11 +719,8 @@ pub fn on_request_vote(
 }
 
 pub fn on_append_entries_resp(
-    persistent: &mut Persistent,
     volatile: &mut Volatile,
     node_id: NodeId,
-    prev_log_index: u64,
-    prev_log_term: u64,
     batch_end_log_index: u64,
     resp: tonic::Result<AppendEntriesResp>,
 ) {
@@ -823,14 +732,13 @@ pub fn on_append_entries_resp(
         if resp.success {
             // We node that node successfully replicated to that point.
             *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
-        }
-        else {
+        } else {
             // In this case we decrease what we thought was the next entry index of the follower
             // node. From there we find the previous entry to this index and pass it as a point of
             // reference to maintain log consistency.
             let next_index = volatile.next_index.get_mut(&node_id).unwrap();
             *next_index = next_index.saturating_sub(1);
-        } 
+        }
 
         return;
     }
