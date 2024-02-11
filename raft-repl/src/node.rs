@@ -1,6 +1,7 @@
 use crate::command::{AppendToStream, ReadStream};
 use crate::data::RecordedEvent;
 use crate::events::ReplEvent;
+use crate::handler::CommandHandler;
 use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
@@ -13,7 +14,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::{Receiver, UnboundedSender};
+use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tonic::body::BoxBody;
@@ -57,7 +58,7 @@ struct Proc {
     kind: ProcKind,
 }
 
-enum ProcKind {
+pub enum ProcKind {
     Managed(raft_server::Node),
     External(ExternalProc),
     #[allow(dead_code)]
@@ -65,21 +66,21 @@ enum ProcKind {
 }
 
 impl ProcKind {
-    fn managed(node: raft_server::Node) -> Self {
+    pub fn managed(node: raft_server::Node) -> Self {
         Self::Managed(node)
     }
 
-    fn external() -> Self {
+    pub fn external() -> Self {
         Self::External(ExternalProc)
     }
 
     #[allow(dead_code)]
-    fn spawn(child: Child) -> Self {
+    pub fn spawn(child: Child) -> Self {
         Self::Spawn(child)
     }
 }
 
-struct ExternalProc;
+pub struct ExternalProc;
 
 pub struct Node {
     idx: usize,
@@ -90,6 +91,7 @@ pub struct Node {
     mailbox: mpsc::Sender<ReplEvent>,
     proc: Arc<Mutex<Option<Proc>>>,
     name_gen: Generator<'static>,
+    local_mailbox: UnboundedSender<NodeCmd>,
 }
 
 impl Node {
@@ -100,10 +102,8 @@ impl Node {
         port: usize,
         seeds: Vec<usize>,
     ) -> eyre::Result<Self> {
-        let mut connector = HttpConnector::new();
-
-        connector.enforce_http(false);
         let name_gen = Generator::default();
+        let (local_mailbox, _) = unbounded_channel();
         let mut node = Self {
             idx,
             connectivity: Connectivity::Offline,
@@ -113,54 +113,12 @@ impl Node {
             seeds,
             name_gen,
             proc: Arc::new(Mutex::new(None)),
+            local_mailbox,
         };
 
         node.start();
 
         Ok(node)
-    }
-
-    pub fn new_external(
-        idx: usize,
-        handle: Handle,
-        mailbox: mpsc::Sender<ReplEvent>,
-        port: usize,
-    ) -> Self {
-        let proc_ref = Arc::new(Mutex::new(None));
-        let node = Node {
-            idx,
-            port,
-            seeds: vec![],
-            connectivity: Connectivity::Offline,
-            handle: handle.clone(),
-            mailbox: mailbox.clone(),
-            proc: proc_ref.clone(),
-            name_gen: Default::default(),
-        };
-
-        let local_handle = handle.clone();
-        handle.spawn(async move {
-            let mut proc = proc_ref.lock().await;
-            let mut connector = HttpConnector::new();
-
-            connector.enforce_http(false);
-            let client = hyper::Client::builder().http2_only(true).build(connector);
-            let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port)).unwrap();
-            let api_client = ApiClient::with_origin(client, uri.clone());
-            let id = Uuid::new_v4();
-
-            *proc = Some(Proc {
-                id,
-                host: uri.host().unwrap_or_default().to_string(),
-                port: uri.port_u16().unwrap_or_default(),
-                api_client: api_client.clone(),
-                kind: ProcKind::external(),
-            });
-
-            spawn_healthcheck_process(id, idx, &local_handle, mailbox, proc_ref.clone());
-        });
-
-        node
     }
 
     pub fn port(&self) -> usize {
@@ -276,30 +234,12 @@ impl Node {
     }
 
     pub fn ping(&self) {
-        let node_id = self.idx;
-        let mailbox = self.mailbox.clone();
-        let proc_ref = self.proc.clone();
-        self.handle.spawn(async move {
-            let mut proc = proc_ref.lock().await;
-
-            if let Some(proc) = proc.as_mut() {
-                if proc.api_client.ping(Request::new(())).await.is_err() {
-                    let _ = mailbox.send(ReplEvent::error(format!("Ping node {} FAILED", node_id)));
-                } else {
-                    let _ = mailbox.send(ReplEvent::msg(format!("Ping node {} ok", node_id)));
-                }
-            } else {
-                let _ = mailbox.send(ReplEvent::warn(format!(
-                    "Pinging node {} is not possible",
-                    node_id
-                )));
-            }
-        });
+        let _ = self.local_mailbox.send(NodeCmd::Ping);
     }
 
     pub fn append_to_stream(&mut self, args: AppendToStream) {
         let node_id = self.idx;
-        let stream_id = if let Some(name) = args.stream {
+        let stream_name = if let Some(name) = args.stream {
             name
         } else {
             self.name_gen.next().unwrap()
@@ -309,103 +249,17 @@ impl Node {
         let payload = serde_json::json!({
             prop_name: value_name,
         });
-        let mailbox = self.mailbox.clone();
-        let proc_ref = self.proc.clone();
-        self.handle.spawn(async move {
-            let mut proc = proc_ref.lock().await;
+        let events = vec![Bytes::from(serde_json::to_vec(&payload).unwrap())];
 
-            if let Some(proc) = proc.as_mut() {
-                if let Err(e) = proc
-                    .api_client
-                    .append(Request::new(AppendReq {
-                        stream_id,
-                        events: vec![Bytes::from(serde_json::to_vec(&payload).unwrap())],
-                    }))
-                    .await
-                {
-                    let _ = mailbox.send(ReplEvent::error(format!(
-                        "node {}: Error when appending: {} ",
-                        node_id,
-                        e.message()
-                    )));
-                } else {
-                    let _ = mailbox.send(ReplEvent::msg(format!(
-                        "node {}: append successful",
-                        node_id
-                    )));
-                }
-            } else {
-                let _ = mailbox.send(ReplEvent::warn(format!(
-                    "Appending node {} is not possible",
-                    node_id
-                )));
-            }
+        let _ = self.local_mailbox.send(NodeCmd::AppendStream {
+            stream_name,
+            events,
         });
     }
 
     pub fn read_stream(&mut self, args: ReadStream) {
-        let node_id = self.idx;
-        let mailbox = self.mailbox.clone();
-        let proc_ref = self.proc.clone();
-
-        self.handle.spawn(async move {
-            let mut proc = proc_ref.lock().await;
-
-            if let Some(proc) = proc.as_mut() {
-                match proc
-                    .api_client
-                    .read(Request::new(ReadReq {
-                        stream_id: args.stream.clone(),
-                    }))
-                    .await
-                {
-                    Err(e) => {
-                        let _ = mailbox.send(ReplEvent::error(format!(
-                            "Reading stream '{}' from node {} caused an error: {}",
-                            args.stream,
-                            args.node,
-                            e.message()
-                        )));
-                    }
-                    Ok(stream) => {
-                        let mut events = Vec::new();
-                        let mut stream = stream.into_inner();
-
-                        loop {
-                            match stream.try_next().await {
-                                Err(e) => {
-                                    let _ = mailbox.send(ReplEvent::error(format!(
-                                        "Reading stream '{}' from node {} caused an error: {}",
-                                        args.stream,
-                                        args.node,
-                                        e.message()
-                                    )));
-                                }
-
-                                Ok(resp) => {
-                                    if let Some(resp) = resp {
-                                        events.push(RecordedEvent {
-                                            stream_id: resp.stream_id,
-                                            global: resp.global,
-                                            revision: resp.revision,
-                                            payload: resp.payload,
-                                        });
-                                        continue;
-                                    }
-
-                                    break;
-                                }
-                            }
-                        }
-
-                        let _ = mailbox.send(ReplEvent::msg(format!(
-                            "Reading stream '{}' from node {} was successful",
-                            args.stream, node_id
-                        )));
-                        let _ = mailbox.send(ReplEvent::stream_read(node_id, args.stream, events));
-                    }
-                }
-            }
+        let _ = self.local_mailbox.send(NodeCmd::ReadStream {
+            stream_name: args.stream,
         });
     }
 
@@ -469,29 +323,38 @@ fn spawn_compiled_node(port: u16, seeds: Vec<u16>) -> eyre::Result<ProcKind> {
     Ok(ProcKind::spawn(child))
 }
 
+pub enum ProcType {
+    Managed,
+    Binary,
+    External,
+}
+
 enum NodeCmd {
     AppendStream {
         stream_name: String,
         events: Vec<Bytes>,
     },
+
     ReadStream {
         stream_name: String,
+    },
+
+    Ping,
+
+    Start {
+        port: u16,
+        seeds: Vec<u16>,
+        r#type: ProcType,
     },
 }
 
 async fn node_command_handler(
     node: usize,
     port: u16,
-    mailbox: UnboundedSender<ReplEvent>,
-    mut receiver: Receiver<NodeCmd>,
+    mailbox: mpsc::Sender<ReplEvent>,
+    mut receiver: UnboundedReceiver<NodeCmd>,
 ) {
-    let mut connector = HttpConnector::new();
-    connector.enforce_http(false);
-    let client = hyper::Client::builder().http2_only(true).build(connector);
-    let uri = hyper::Uri::from_maybe_shared(format!("http://localhost:{}", port)).unwrap();
-    let mut api_client = ApiClient::with_origin(client, uri);
-    let mut state = Connectivity::Offline;
-    let mut last_term = 0;
+    let mut handler = CommandHandler::new(node, port, mailbox);
 
     loop {
         if let Ok(msg) = timeout(Duration::from_secs(1), receiver.recv()).await {
@@ -502,97 +365,21 @@ async fn node_command_handler(
             };
 
             match msg {
-                NodeCmd::AppendStream { .. } => {}
-                NodeCmd::ReadStream { stream_name } => {
-                    match api_client
-                        .read(Request::new(ReadReq {
-                            stream_id: stream_name.clone(),
-                        }))
-                        .await
-                    {
-                        Err(e) => {
-                            let _ = mailbox.send(ReplEvent::error(format!(
-                                "Reading stream '{}' from node {} caused an error: {}",
-                                stream_name,
-                                node,
-                                e.message()
-                            )));
-                        }
-                        Ok(stream) => {
-                            let mut events = Vec::new();
-                            let mut stream = stream.into_inner();
+                NodeCmd::AppendStream {
+                    stream_name,
+                    events,
+                } => handler.append_stream(stream_name, events).await,
 
-                            loop {
-                                match stream.try_next().await {
-                                    Err(e) => {
-                                        let _ = mailbox.send(ReplEvent::error(format!(
-                                            "Reading stream '{}' from node {} caused an error: {}",
-                                            stream_name,
-                                            node,
-                                            e.message()
-                                        )));
-                                    }
-
-                                    Ok(resp) => {
-                                        if let Some(resp) = resp {
-                                            events.push(RecordedEvent {
-                                                stream_id: resp.stream_id,
-                                                global: resp.global,
-                                                revision: resp.revision,
-                                                payload: resp.payload,
-                                            });
-                                            continue;
-                                        }
-
-                                        break;
-                                    }
-                                }
-                            }
-
-                            let _ = mailbox.send(ReplEvent::msg(format!(
-                                "Reading stream '{}' from node {} was successful",
-                                stream_name, node
-                            )));
-                            let _ = mailbox.send(ReplEvent::stream_read(node, stream_name, events));
-                        }
-                    }
-                }
+                NodeCmd::ReadStream { stream_name } => handler.read_stream(stream_name).await,
+                NodeCmd::Start {
+                    port,
+                    seeds,
+                    r#type,
+                } => handler.start(port, seeds, ProcType::Managed).await,
+                NodeCmd::Ping => handler.ping().await,
             }
         } else {
-            match api_client.status(Request::new(())).await {
-                Err(e) => {
-                    error!(
-                        "node_{}:{} error when requesting status: {}",
-                        "localhost", port, e
-                    );
-
-                    if state.is_online() {
-                        let _ = mailbox.send(ReplEvent::warn(format!(
-                            "Node {} connection error: {}",
-                            node,
-                            e.message(),
-                        )));
-
-                        let _ =
-                            mailbox.send(ReplEvent::node_connectivity(node, Connectivity::Offline));
-                        state = Connectivity::Offline;
-                    }
-                }
-
-                Ok(resp) => {
-                    let resp = resp.into_inner();
-                    info!("node_{}:{} status = {:?}", "localhost", port, resp);
-
-                    if state.is_offline()
-                        || last_term != resp.term
-                        || state.status() != Some(resp.status.clone())
-                    {
-                        last_term = resp.term;
-                        state = Connectivity::Online(resp);
-                        let _ = mailbox.send(ReplEvent::node_connectivity(node, state.clone()));
-                    }
-                }
-            }
+            handler.status().await;
         }
     }
 }

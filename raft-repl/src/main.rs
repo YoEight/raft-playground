@@ -1,6 +1,7 @@
 mod command;
 mod data;
 mod events;
+mod handler;
 mod history;
 mod inputs;
 mod node;

@@ -316,37 +316,37 @@ impl State {
     }
 
     fn start_node(&mut self, args: Start) -> eyre::Result<()> {
-        if args.external {
-            let new_node = Node::new_external(
-                args.node,
-                self.runtime.handle().clone(),
-                self.mailbox.clone(),
-                args.port.unwrap_or(2_113),
-            );
+        // if args.external {
+        //     let new_node = Node::new_external(
+        //         args.node,
+        //         self.runtime.handle().clone(),
+        //         self.mailbox.clone(),
+        //         args.port.unwrap_or(2_113),
+        //     );
+        //
+        //     if let Some(node) = self.nodes.get_mut(args.node) {
+        //         let mut prev = std::mem::replace(node, new_node);
+        //
+        //         prev.stop();
+        //         prev.cleanup();
+        //     } else {
+        //         if args.node > self.nodes.len() {
+        //             self.nodes.push(new_node);
+        //         } else {
+        //             self.nodes.insert(args.node, new_node);
+        //         }
+        //     }
+        //
+        //     return Ok(());
+        // }
+        //
+        // if args.node >= self.nodes.len() {
+        //     eyre::bail!("Node {} doesn't exist", args.node);
+        // }
+        //
+        // self.nodes[args.node].start();
 
-            if let Some(node) = self.nodes.get_mut(args.node) {
-                let mut prev = std::mem::replace(node, new_node);
-
-                prev.stop();
-                prev.cleanup();
-            } else {
-                if args.node > self.nodes.len() {
-                    self.nodes.push(new_node);
-                } else {
-                    self.nodes.insert(args.node, new_node);
-                }
-            }
-
-            return Ok(());
-        }
-
-        if args.node >= self.nodes.len() {
-            eyre::bail!("Node {} doesn't exist", args.node);
-        }
-
-        self.nodes[args.node].start();
-
-        Ok(())
+        eyre::bail!("Not supported anymore!")
     }
 
     fn restart_node(&mut self, args: Restart) -> eyre::Result<()> {
