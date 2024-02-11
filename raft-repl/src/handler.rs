@@ -216,10 +216,11 @@ impl CommandHandler {
             return;
         }
 
-        let _ = self.mailbox.send(ReplEvent::error(format!(
-            "Can't read status on node {} because it isn't connected",
-            self.index
-        )));
+        let _ = self.mailbox.send(ReplEvent::node_connectivity(
+            self.index,
+            Connectivity::Offline,
+            self.is_external(),
+        ));
     }
 
     pub async fn cleanup(mut self) {
@@ -328,10 +329,8 @@ impl CommandHandler {
             )));
 
             match kind {
-                ProcKind::Managed(args) => {
-                    if let Some(handle) = args.join {
-                        handle.abort();
-                    }
+                ProcKind::Managed(node) => {
+                    node.shutdown();
                 }
 
                 ProcKind::External(_) => {

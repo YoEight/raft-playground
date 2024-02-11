@@ -5,7 +5,7 @@ use bytes::Bytes;
 use names::Generator;
 use raft_common::StatusResp;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -200,9 +200,11 @@ async fn node_command_handler(
     mut receiver: UnboundedReceiver<NodeCmd>,
 ) {
     let mut handler = CommandHandler::new(node, mailbox);
+    let freq = Duration::from_secs(1);
+    let mut tracker = Instant::now();
 
     loop {
-        if let Ok(msg) = timeout(Duration::from_secs(1), receiver.recv()).await {
+        if let Ok(msg) = timeout(freq.saturating_sub(tracker.elapsed()), receiver.recv()).await {
             let msg = if let Some(msg) = msg {
                 msg
             } else {
@@ -235,6 +237,7 @@ async fn node_command_handler(
             }
         } else {
             handler.status().await;
+            tracker = Instant::now();
         }
     }
 }

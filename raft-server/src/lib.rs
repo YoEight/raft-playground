@@ -22,8 +22,8 @@ pub struct Node {
     _seeds: Vec<Seed>,
     handle: thread::JoinHandle<()>,
     client: NodeClient,
-    pub join: Option<JoinHandle<Result<(), transport::Error>>>,
     runtime: Handle,
+    shutdown_send: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Node {
@@ -61,8 +61,8 @@ impl Node {
             _seeds: seeds,
             client,
             handle,
-            join: None,
             runtime,
+            shutdown_send: None,
         })
     }
 
@@ -73,18 +73,27 @@ impl Node {
 
         // println!("Listening on {}:{}", self.id.host, self.id.port);
         let client = self.client.clone();
-        let join = self.runtime.spawn(async move {
+        let (send_shutdown, receive_shutdown) = tokio::sync::oneshot::channel();
+        self.runtime.spawn(async move {
             Server::builder()
                 .add_service(RaftServer::new(RaftImpl::new(client.clone())))
                 .add_service(ApiServer::new(ApiImpl::new(client)))
-                .serve(addr)
+                .serve_with_shutdown(addr, async move {
+                    let _ = receive_shutdown.await;
+                })
                 .await
         });
 
-        self.join = Some(join);
+        self.shutdown_send = Some(send_shutdown);
     }
 
     pub fn wait_for_completion(self) {
         let _ = self.handle.join();
+    }
+
+    pub fn shutdown(self) {
+        if let Some(shutdown) = self.shutdown_send {
+            let _ = shutdown.send(());
+        }
     }
 }
