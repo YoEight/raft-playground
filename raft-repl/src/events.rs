@@ -1,11 +1,11 @@
 use crate::data::RecordedEvent;
-use crate::node::Connectivity;
+use raft_common::StatusResp;
 use tui_textarea::Input;
 
 pub enum ReplEvent {
     Input(Input),
     Notification(Notification),
-    NodeConnectivityChanged(NodeConnectivityEvent),
+    NodeStatusReceived(NodeStatusEvent),
     StreamRead(StreamRead),
 }
 
@@ -31,12 +31,8 @@ impl ReplEvent {
         })
     }
 
-    pub fn node_connectivity(node: usize, connectivity: Connectivity, external: bool) -> Self {
-        Self::NodeConnectivityChanged(NodeConnectivityEvent {
-            node,
-            connectivity,
-            external,
-        })
+    pub fn node_connectivity(node: usize, status: Option<StatusResp>) -> Self {
+        Self::NodeStatusReceived(NodeStatusEvent { node, status })
     }
 
     pub fn stream_read(node: usize, stream: String, events: Vec<RecordedEvent>) -> Self {
@@ -59,10 +55,9 @@ pub enum NotificationType {
     Warning,
 }
 
-pub struct NodeConnectivityEvent {
+pub struct NodeStatusEvent {
     pub node: usize,
-    pub connectivity: Connectivity,
-    pub external: bool,
+    pub status: Option<StatusResp>,
 }
 
 pub struct StreamRead {

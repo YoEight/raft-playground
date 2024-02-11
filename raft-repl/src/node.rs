@@ -12,33 +12,6 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-#[derive(Clone)]
-pub enum Connectivity {
-    Online(StatusResp),
-    Offline,
-}
-
-impl Connectivity {
-    pub fn is_offline(&self) -> bool {
-        if let Connectivity::Offline = self {
-            return true;
-        }
-
-        false
-    }
-
-    pub fn is_online(&self) -> bool {
-        !self.is_offline()
-    }
-
-    pub fn status(&self) -> Option<String> {
-        match self {
-            Connectivity::Online(r) => Some(r.status.clone()),
-            Connectivity::Offline => None,
-        }
-    }
-}
-
 pub enum ProcKind {
     Managed(raft_server::Node),
     External(ExternalProc),
@@ -67,7 +40,7 @@ pub struct Node {
     handle: Handle,
     port: u16,
     seeds: Vec<u16>,
-    connectivity: Connectivity,
+    status: Option<StatusResp>,
     name_gen: Generator<'static>,
     local_mailbox: UnboundedSender<NodeCmd>,
 }
@@ -83,7 +56,7 @@ impl Node {
         let name_gen = Generator::default();
         let (local_mailbox, local_receiver) = unbounded_channel();
         let mut node = Self {
-            connectivity: Connectivity::Offline,
+            status: None,
             seeds,
             port,
             name_gen,
@@ -108,12 +81,12 @@ impl Node {
         self.port
     }
 
-    pub fn connectivity(&self) -> &Connectivity {
-        &self.connectivity
+    pub fn status(&self) -> Option<&StatusResp> {
+        self.status.as_ref()
     }
 
-    pub fn set_connectivity(&mut self, connectivity: Connectivity) {
-        self.connectivity = connectivity;
+    pub fn set_status(&mut self, status: Option<StatusResp>) {
+        self.status = status;
     }
 
     pub fn stop(&mut self) {

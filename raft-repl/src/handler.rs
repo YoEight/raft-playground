@@ -1,6 +1,6 @@
 use crate::data::RecordedEvent;
 use crate::events::ReplEvent;
-use crate::node::{Connectivity, ProcKind, ProcType};
+use crate::node::{ProcKind, ProcType};
 use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
@@ -9,14 +9,12 @@ use raft_common::{AppendReq, ReadReq};
 use raft_server::{options, Node};
 use std::process::Stdio;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
 use tokio::process::Command;
 use tokio::runtime::Handle;
-use tokio::time::sleep;
 use tonic::body::BoxBody;
 use tonic::codegen::tokio_stream::StreamExt;
-use tonic::{Code, Request};
-use tracing::{error, info};
+use tonic::Request;
+use tracing::error;
 
 type GrpcClient = ApiClient<Client<HttpConnector, BoxBody>>;
 
@@ -43,8 +41,6 @@ impl ProcState {
 
 pub struct CommandHandler {
     index: usize,
-    last_term: u64,
-    state: Connectivity,
     mailbox: Sender<ReplEvent>,
     proc: ProcState,
 }
@@ -53,23 +49,9 @@ impl CommandHandler {
     pub fn new(index: usize, mailbox: Sender<ReplEvent>) -> Self {
         Self {
             index,
-            last_term: 0,
-            state: Connectivity::Offline,
             mailbox,
             proc: ProcState::Disconnected,
         }
-    }
-
-    pub fn is_external(&self) -> bool {
-        if let ProcState::Connected {
-            kind: ProcKind::External(_),
-            ..
-        } = &self.proc
-        {
-            return true;
-        }
-
-        false
     }
 
     pub async fn read_stream(&mut self, stream_name: String) {
@@ -178,49 +160,25 @@ impl CommandHandler {
                         "localhost", port, e
                     );
 
-                    if self.state.is_online() {
-                        let _ = self.mailbox.send(ReplEvent::warn(format!(
-                            "Node {} connection error: {}",
-                            self.index,
-                            e.message(),
-                        )));
-
-                        let _ = self.mailbox.send(ReplEvent::node_connectivity(
-                            self.index,
-                            Connectivity::Offline,
-                            self.is_external(),
-                        ));
-                        self.state = Connectivity::Offline;
-                    }
+                    let _ = self
+                        .mailbox
+                        .send(ReplEvent::node_connectivity(self.index, None));
                 }
 
                 Ok(resp) => {
                     let resp = resp.into_inner();
-                    info!("node_{}:{} status = {:?}", "localhost", port, resp);
-
-                    if self.state.is_offline()
-                        || self.last_term != resp.term
-                        || self.state.status() != Some(resp.status.clone())
-                    {
-                        self.last_term = resp.term;
-                        self.state = Connectivity::Online(resp);
-                        let _ = self.mailbox.send(ReplEvent::node_connectivity(
-                            self.index,
-                            self.state.clone(),
-                            self.is_external(),
-                        ));
-                    }
+                    let _ = self
+                        .mailbox
+                        .send(ReplEvent::node_connectivity(self.index, Some(resp)));
                 }
             }
 
             return;
         }
 
-        let _ = self.mailbox.send(ReplEvent::node_connectivity(
-            self.index,
-            Connectivity::Offline,
-            self.is_external(),
-        ));
+        let _ = self
+            .mailbox
+            .send(ReplEvent::node_connectivity(self.index, None));
     }
 
     pub async fn cleanup(mut self) {
@@ -322,7 +280,7 @@ impl CommandHandler {
     }
 
     pub async fn stop(&mut self) {
-        if let Some((kind, mut client)) = self.proc.take() {
+        if let Some((kind, ..)) = self.proc.take() {
             let _ = self.mailbox.send(ReplEvent::msg(format!(
                 "Node {} is stopping...",
                 self.index
@@ -345,21 +303,6 @@ impl CommandHandler {
                 ProcKind::Spawn(mut args) => {
                     let _ = args.kill();
                 }
-            }
-
-            loop {
-                if let Err(status) = client.status(Request::new(())).await {
-                    if status.code() == Code::Unavailable {
-                        let _ = self
-                            .mailbox
-                            .send(ReplEvent::msg(format!("Node {} is stopped", self.index)));
-
-                        return;
-                    }
-                }
-
-                info!("Node {} is still up. keep waiting...", self.index);
-                sleep(Duration::from_millis(500)).await;
             }
         }
     }

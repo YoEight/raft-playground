@@ -17,9 +17,9 @@ use tui_textarea::{CursorMove, Input, Key, TextArea};
 use crate::command::{
     AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Restart, Spawn, Start, Stop,
 };
-use crate::events::{NodeConnectivityEvent, Notification, NotificationType, ReplEvent, StreamRead};
+use crate::events::{NodeStatusEvent, Notification, NotificationType, ReplEvent, StreamRead};
 use crate::history::History;
-use crate::node::{Connectivity, Node};
+use crate::node::Node;
 use crate::persistence::FileBackend;
 use crate::ui::popup::Popup;
 
@@ -74,19 +74,16 @@ impl State {
 
             cells.push(Cell::from(format!("{}: localhost:{}", idx, node.port(),)));
 
-            match node.connectivity() {
-                Connectivity::Online(status) => {
-                    cells.push(Cell::from("online").style(Style::default().fg(Color::Green)));
-                    cells.push(Cell::from(status.term.to_string()));
-                    cells.push(Cell::from(status.status.to_string()));
-                    cells.push(Cell::from(status.log_index.to_string()));
-                }
-                Connectivity::Offline => {
-                    cells.push(Cell::from("offline").style(Style::default().fg(Color::Red)));
-                    cells.push(Cell::from("".to_string()));
-                    cells.push(Cell::from("".to_string()));
-                    cells.push(Cell::from("".to_string()));
-                }
+            if let Some(status) = node.status() {
+                cells.push(Cell::from("online").style(Style::default().fg(Color::Green)));
+                cells.push(Cell::from(status.term.to_string()));
+                cells.push(Cell::from(status.status.to_string()));
+                cells.push(Cell::from(status.log_index.to_string()));
+            } else {
+                cells.push(Cell::from("offline").style(Style::default().fg(Color::Red)));
+                cells.push(Cell::from("".to_string()));
+                cells.push(Cell::from("".to_string()));
+                cells.push(Cell::from("".to_string()));
             }
 
             rows.push(Row::new(cells));
@@ -238,20 +235,36 @@ impl State {
         self.push_notification(event);
     }
 
-    pub fn on_node_connectivity_changed(&mut self, event: NodeConnectivityEvent) {
-        let status = match event.connectivity.clone() {
-            Connectivity::Online(r) => match r.status.as_str() {
-                "candidate" => Span::raw(r.status).style(Style::default().fg(Color::Yellow)),
-                _ => Span::raw(r.status).style(Style::default().fg(Color::Green)),
-            },
-            Connectivity::Offline => Span::raw("offline").style(Style::default().fg(Color::Red)),
+    pub fn on_node_connectivity_changed(&mut self, event: NodeStatusEvent) {
+        let report_change = if let Some(prev) = self.nodes[event.node].status() {
+            if let Some(new) = event.status.as_ref() {
+                prev.status != new.status
+            } else {
+                true
+            }
+        } else {
+            event.status.is_some()
         };
 
-        self.nodes[event.node].set_connectivity(event.connectivity);
-        self.push_event_line(Line::from(vec![
-            Span::raw(format!("Node {} is ", event.node)),
-            status,
-        ]));
+        if report_change {
+            let status = if let Some(resp) = event.status.as_ref() {
+                match resp.status.as_str() {
+                    "candidate" => {
+                        Span::raw(resp.status.clone()).style(Style::default().fg(Color::Yellow))
+                    }
+                    _ => Span::raw(resp.status.clone()).style(Style::default().fg(Color::Green)),
+                }
+            } else {
+                Span::raw("offline").style(Style::default().fg(Color::Red))
+            };
+
+            self.push_event_line(Line::from(vec![
+                Span::raw(format!("Node {} is ", event.node)),
+                status,
+            ]));
+        }
+
+        self.nodes[event.node].set_status(event.status);
     }
 
     pub fn on_node_stream_read(&mut self, event: StreamRead) {

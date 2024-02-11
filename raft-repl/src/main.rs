@@ -30,7 +30,8 @@ use tracing_subscriber::Registry;
 
 fn main() -> eyre::Result<()> {
     let console_layer = console_subscriber::spawn();
-    let logs = rolling::daily("./logs", "repl.txt").with_filter(|m| m.target().starts_with("raft"));
+    let logs =
+        rolling::daily("./logs", "repl.txt").with_filter(|m| m.target().starts_with("raft_repl"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_file(false)
@@ -94,7 +95,7 @@ fn app_loop(
                     state.on_notification(event);
                 }
 
-                ReplEvent::NodeConnectivityChanged(event) => {
+                ReplEvent::NodeStatusReceived(event) => {
                     state.on_node_connectivity_changed(event);
                 }
 
