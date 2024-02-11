@@ -31,8 +31,12 @@ impl ReplEvent {
         })
     }
 
-    pub fn node_connectivity(node: usize, connectivity: Connectivity) -> Self {
-        Self::NodeConnectivityChanged(NodeConnectivityEvent { node, connectivity })
+    pub fn node_connectivity(node: usize, connectivity: Connectivity, external: bool) -> Self {
+        Self::NodeConnectivityChanged(NodeConnectivityEvent {
+            node,
+            connectivity,
+            external,
+        })
     }
 
     pub fn stream_read(node: usize, stream: String, events: Vec<RecordedEvent>) -> Self {
@@ -58,6 +62,7 @@ pub enum NotificationType {
 pub struct NodeConnectivityEvent {
     pub node: usize,
     pub connectivity: Connectivity,
+    pub external: bool,
 }
 
 pub struct StreamRead {

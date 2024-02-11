@@ -72,18 +72,8 @@ impl State {
         for (idx, node) in self.nodes.iter().enumerate() {
             let mut cells = Vec::new();
 
-            let suffix = if let Some(true) = node.is_external() {
-                "(ext)"
-            } else {
-                ""
-            };
+            cells.push(Cell::from(format!("{}: localhost:{}", idx, node.port(),)));
 
-            cells.push(Cell::from(format!(
-                "{}: localhost:{} {}",
-                idx,
-                node.port(),
-                suffix
-            )));
             match node.connectivity() {
                 Connectivity::Online(status) => {
                     cells.push(Cell::from("online").style(Style::default().fg(Color::Green)));
@@ -283,7 +273,7 @@ impl State {
         let mut all_nodes = Vec::new();
 
         for idx in 0..args.count {
-            all_nodes.push(starting_port + idx);
+            all_nodes.push((starting_port + idx) as u16);
         }
 
         for (idx, port) in all_nodes.iter().copied().enumerate() {
@@ -316,42 +306,16 @@ impl State {
     }
 
     fn start_node(&mut self, args: Start) -> eyre::Result<()> {
-        // if args.external {
-        //     let new_node = Node::new_external(
-        //         args.node,
-        //         self.runtime.handle().clone(),
-        //         self.mailbox.clone(),
-        //         args.port.unwrap_or(2_113),
-        //     );
-        //
-        //     if let Some(node) = self.nodes.get_mut(args.node) {
-        //         let mut prev = std::mem::replace(node, new_node);
-        //
-        //         prev.stop();
-        //         prev.cleanup();
-        //     } else {
-        //         if args.node > self.nodes.len() {
-        //             self.nodes.push(new_node);
-        //         } else {
-        //             self.nodes.insert(args.node, new_node);
-        //         }
-        //     }
-        //
-        //     return Ok(());
-        // }
-        //
-        // if args.node >= self.nodes.len() {
-        //     eyre::bail!("Node {} doesn't exist", args.node);
-        // }
-        //
-        // self.nodes[args.node].start();
+        if let Some(node) = self.nodes.get_mut(args.node) {
+            node.start();
+            return Ok(());
+        }
 
-        eyre::bail!("Not supported anymore!")
+        eyre::bail!("Node {} doesn't exist", args.node);
     }
 
     fn restart_node(&mut self, args: Restart) -> eyre::Result<()> {
         if let Some(node) = self.nodes.get_mut(args.node) {
-            node.stop();
             node.start();
             return Ok(());
         }
