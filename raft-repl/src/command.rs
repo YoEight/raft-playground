@@ -21,6 +21,9 @@ pub enum Command {
     ReadStream(ReadStream),
     /// Ping a server node.
     Ping(Ping),
+
+    /// Read status from a node.
+    Status(StatusNode),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -102,4 +105,10 @@ pub struct PingExternal {
 
     #[arg(long)]
     pub port: u16,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct StatusNode {
+    /// Node index
+    pub node: usize,
 }

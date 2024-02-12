@@ -1,5 +1,5 @@
 use crate::data::RecordedEvent;
-use crate::events::ReplEvent;
+use crate::events::{ReplEvent, StatusRead};
 use crate::node::{ProcKind, ProcType};
 use bytes::Bytes;
 use hyper::client::HttpConnector;
@@ -149,6 +149,25 @@ impl CommandHandler {
             "Can't append stream on node {} because it isn't connected",
             self.index
         )));
+    }
+
+    pub async fn status_req(&mut self) {
+        let resp = if let ProcState::Connected { client, .. } = &mut self.proc {
+            match client.status(Request::new(())).await {
+                Ok(resp) => Some(resp.into_inner()),
+                Err(e) => {
+                    error!("Node {} errored when reading status: {}", self.index, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let _ = self.mailbox.send(ReplEvent::StatusRead(StatusRead {
+            node: self.index,
+            status: resp,
+        }));
     }
 
     pub async fn status(&mut self) {

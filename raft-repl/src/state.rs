@@ -12,12 +12,16 @@ use std::sync::mpsc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 use tonic::Request;
+use tracing::info;
 use tui_textarea::{CursorMove, Input, Key, TextArea};
 
 use crate::command::{
-    AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Restart, Spawn, Start, Stop,
+    AppendToStream, Command, Commands, Ping, PingCommand, ReadStream, Restart, Spawn, Start,
+    StatusNode, Stop,
 };
-use crate::events::{NodeStatusEvent, Notification, NotificationType, ReplEvent, StreamRead};
+use crate::events::{
+    NodeStatusEvent, Notification, NotificationType, ReplEvent, StatusRead, StreamRead,
+};
 use crate::history::History;
 use crate::node::Node;
 use crate::persistence::FileBackend;
@@ -215,6 +219,7 @@ impl State {
                         Command::AppendToStream(args) => self.append_to_stream(args),
                         Command::ReadStream(args) => self.read_stream(args),
                         Command::Ping(args) => self.ping_node(args),
+                        Command::Status(args) => self.status_node(args),
                     };
 
                     if let Err(e) = result {
@@ -238,11 +243,22 @@ impl State {
     pub fn on_node_connectivity_changed(&mut self, event: NodeStatusEvent) {
         let report_change = if let Some(prev) = self.nodes[event.node].status() {
             if let Some(new) = event.status.as_ref() {
-                prev.status != new.status
+                let test = prev.status != new.status;
+                if test {
+                    info!(
+                        "Node {} is moving {} -> {}",
+                        event.node, prev.status, new.status
+                    );
+                }
+                test
             } else {
+                info!("Node {} is moving {} -> offline", event.node, prev.status);
                 true
             }
         } else {
+            if let Some(new) = event.status.as_ref() {
+                info!("Node {} is moving offline -> {}", event.node, new.status);
+            }
             event.status.is_some()
         };
 
@@ -274,6 +290,13 @@ impl State {
         ));
 
         self.popup.set_text(serialize_records(event));
+        self.popup.shown = true;
+    }
+
+    pub fn on_node_status(&mut self, event: StatusRead) {
+        self.popup.set_title(format!("Node {} status", event.node));
+        self.popup
+            .set_text(Text::raw(format!("{:?}", event.status)));
         self.popup.shown = true;
     }
 
@@ -428,6 +451,15 @@ impl State {
         }
 
         Ok(())
+    }
+
+    fn status_node(&mut self, args: StatusNode) -> eyre::Result<()> {
+        if let Some(node) = self.nodes.get_mut(args.node) {
+            node.read_status();
+            return Ok(());
+        }
+
+        eyre::bail!("Node {} doesn't exist", args.node);
     }
 
     fn cleanup(&mut self) {

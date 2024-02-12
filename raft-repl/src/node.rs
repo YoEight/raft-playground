@@ -105,6 +105,10 @@ impl Node {
         let _ = self.local_mailbox.send(NodeCmd::Ping);
     }
 
+    pub fn read_status(&mut self) {
+        let _ = self.local_mailbox.send(NodeCmd::Status);
+    }
+
     pub fn append_to_stream(&mut self, args: AppendToStream) {
         let stream_name = if let Some(name) = args.stream {
             name
@@ -164,6 +168,8 @@ enum NodeCmd {
     Stop,
 
     Cleanup(oneshot::Sender<()>),
+
+    Status,
 }
 
 async fn node_command_handler(
@@ -207,6 +213,8 @@ async fn node_command_handler(
                     let _ = complete.send(());
                     break;
                 }
+
+                NodeCmd::Status => handler.status_req().await,
             }
         } else {
             handler.status().await;

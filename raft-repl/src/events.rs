@@ -7,6 +7,7 @@ pub enum ReplEvent {
     Notification(Notification),
     NodeStatusReceived(NodeStatusEvent),
     StreamRead(StreamRead),
+    StatusRead(StatusRead),
 }
 
 impl ReplEvent {
@@ -64,4 +65,9 @@ pub struct StreamRead {
     pub node: usize,
     pub stream: String,
     pub events: Vec<RecordedEvent>,
+}
+
+pub struct StatusRead {
+    pub node: usize,
+    pub status: Option<StatusResp>,
 }

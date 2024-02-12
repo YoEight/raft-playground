@@ -102,6 +102,10 @@ fn app_loop(
                 ReplEvent::StreamRead(event) => {
                     state.on_node_stream_read(event);
                 }
+
+                ReplEvent::StatusRead(event) => {
+                    state.on_node_status(event);
+                }
             },
         }
 
