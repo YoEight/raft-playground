@@ -8,8 +8,7 @@ use raft_common::{
     NodeId,
 };
 use seed::Seed;
-use tokio::task::JoinHandle;
-use tonic::transport::{self, Server};
+use tonic::transport::Server;
 
 pub mod entry;
 pub mod grpc;
@@ -93,6 +92,7 @@ impl Node {
 
     pub fn shutdown(self) {
         if let Some(shutdown) = self.shutdown_send {
+            self.client.shutdown();
             let _ = shutdown.send(());
         }
     }

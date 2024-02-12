@@ -63,6 +63,8 @@ pub enum Msg {
     Status {
         resp: oneshot::Sender<StatusResp>,
     },
+
+    Shutdown,
 }
 
 #[derive(Debug)]
@@ -367,6 +369,10 @@ impl NodeClient {
             resp,
         });
     }
+
+    pub fn shutdown(self) {
+        let _ = self.sender.send(Msg::Shutdown);
+    }
 }
 
 pub fn start(
@@ -423,6 +429,11 @@ fn state_machine(
         );
 
         match msg {
+            Msg::Shutdown => {
+                // Write graceful exit processes here
+                break;
+            }
+
             Msg::RequestVote {
                 term,
                 candidate_id,
