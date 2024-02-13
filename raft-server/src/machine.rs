@@ -763,6 +763,8 @@ pub fn on_append_entries_resp(
             // Means that node successfully replicated to that point.
             *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
 
+            // FIXME - This implementation is insufficient, that condition doesn't ascertain
+            // that we replicated a specific index to the majority of the cluster's nodes.
             let mut lowest_replicated_index = u64::MAX;
             for match_index in volatile.match_index.values() {
                 lowest_replicated_index = min(lowest_replicated_index, *match_index);
