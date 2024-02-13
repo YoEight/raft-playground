@@ -805,6 +805,12 @@ fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
         volatile.id.host, volatile.id.port, persistent.term
     );
 
+    let next_index_init = persistent.entries.last_index() + 1;
+    for seed in &volatile.seeds {
+        volatile.match_index.insert(seed.id.clone(), 0);
+        volatile.next_index.insert(seed.id.clone(), next_index_init);
+    }
+
     // Send heartbeat request to assert dominance.
     send_append_entries(persistent, volatile);
 }
