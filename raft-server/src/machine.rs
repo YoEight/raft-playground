@@ -134,8 +134,6 @@ pub struct Persistent {
     pub id: NodeId,
     pub entries: Entries,
     pub term: u64,
-    pub commit_index: u64,
-    pub last_applied: u64,
 }
 
 impl Persistent {
@@ -144,8 +142,6 @@ impl Persistent {
             id: Default::default(),
             entries: Default::default(),
             term: 0,
-            commit_index: 0,
-            last_applied: 0,
         }
     }
 }
@@ -162,6 +158,14 @@ pub struct Volatile {
     pub election_timeout_range: ElectionTimeoutRange,
     pub tally: HashSet<NodeId>,
     pub heartbeat_timeout: Instant,
+    pub inflights: Vec<(u64, oneshot::Sender<Option<u64>>)>,
+    // We won't cover `last_applied` as we don't actually have any state to apply. As a side
+    // node, I think this property to be useful in the case where we want to index the data that our
+    // system stores. Meaning, `last_applied` could be the position of the indexing system if our
+    // system was a database. Indexing is typically done in a separate thread from the replication
+    // and commit of entries.
+    pub last_applied: u64,
+    pub commit_index: u64,
 }
 
 impl Volatile {
@@ -185,6 +189,9 @@ impl Volatile {
             election_timeout_range: Default::default(),
             tally: Default::default(),
             heartbeat_timeout: Instant::now(),
+            inflights: Vec::new(),
+            last_applied: 0,
+            commit_index: 0,
         }
     }
 
@@ -201,6 +208,12 @@ impl Volatile {
         self.tally.clear();
         self.match_index.clear();
         self.next_index.clear();
+        self.commit_index = 0;
+        self.last_applied = 0;
+
+        for (_, sender) in self.inflights.drain(..) {
+            let _ = sender.send(None);
+        }
     }
 
     pub fn election_timeout(&self) -> bool {
@@ -489,26 +502,17 @@ fn state_machine(
                 batch_end_log_index,
                 resp,
             } => on_append_entries_resp(&mut volatile, node_id, batch_end_log_index, resp),
+
             Msg::AppendStream {
                 stream_id,
                 events,
                 resp,
             } => {
-                if volatile.status != Status::Leader {
-                    let _ = resp.send(None);
-                    continue;
-                }
-
-                on_append_stream(&mut persistent, stream_id, events, resp);
+                on_append_stream(&mut persistent, &mut volatile, stream_id, events, resp);
             }
 
             Msg::ReadStream { stream_id, resp } => {
-                if volatile.status != Status::Leader {
-                    let _ = resp.send(None);
-                    continue;
-                }
-
-                on_read_stream(&mut persistent, stream_id, resp);
+                on_read_stream(&mut persistent, &mut volatile, stream_id, resp);
             }
 
             Msg::Status { resp } => {
@@ -524,13 +528,14 @@ fn on_status(persistent: &Persistent, volatile: &Volatile, resp: oneshot::Sender
         status: volatile.status,
         leader_id: volatile.leader.clone(),
         term: persistent.term,
-        log_index: persistent.commit_index,
+        log_index: volatile.commit_index,
         global: 0,
     });
 }
 
 fn on_read_stream(
     persistent: &mut Persistent,
+    volatile: &mut Volatile,
     stream_id: String,
     resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
 ) {
@@ -563,10 +568,16 @@ fn on_read_stream(
 
 fn on_append_stream(
     persistent: &mut Persistent,
+    volatile: &mut Volatile,
     stream_id: String,
     events: Vec<Bytes>,
     resp: oneshot::Sender<Option<u64>>,
 ) {
+    if volatile.status != Status::Leader {
+        let _ = resp.send(None);
+        return;
+    }
+
     let stream_id_len = stream_id.chars().count() as u32;
     let mut index = persistent.entries.last_index();
     let term = persistent.term;
@@ -584,7 +595,14 @@ fn on_append_stream(
         });
     }
 
-    let _ = resp.send(Some(index));
+    // Means we are in single node.
+    if volatile.seeds.is_empty() {
+        let _ = resp.send(Some(index));
+    } else {
+        // We need at least 2/n + 1 nodes that have replicated that write to confirm it to the
+        // client
+        volatile.inflights.push((index, resp));
+    }
 }
 
 pub fn on_vote_received(
@@ -679,11 +697,12 @@ pub fn on_append_entries(
             .remove_uncommitted_entries_from(prev_log_index, prev_log_term);
     }
 
-    if leader_commit > persistent.commit_index {
-        persistent.commit_index = min(leader_commit, entries.last().unwrap().index);
-    }
-
+    let last_entry_index = entries.last().unwrap().index;
     persistent.entries.append(entries);
+
+    if leader_commit > volatile.commit_index {
+        volatile.commit_index = min(leader_commit, last_entry_index);
+    }
 
     (persistent.term, true)
 }
@@ -741,8 +760,26 @@ pub fn on_append_entries_resp(
 
     if let Ok(resp) = resp {
         if resp.success {
-            // We node that node successfully replicated to that point.
+            // Means that node successfully replicated to that point.
             *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
+
+            let mut lowest_replicated_index = u64::MAX;
+            for match_index in volatile.match_index.values() {
+                lowest_replicated_index = min(lowest_replicated_index, *match_index);
+            }
+
+            let mut temp = Vec::new();
+            for (index, sender) in volatile.inflights.drain(..) {
+                if index <= lowest_replicated_index {
+                    let _ = sender.send(Some(index));
+                    continue;
+                }
+
+                temp.push((index, sender));
+            }
+
+            volatile.inflights = temp;
+            volatile.commit_index = lowest_replicated_index;
         } else {
             // In this case we decrease what we thought was the next entry index of the follower
             // node. From there we find the previous entry to this index and pass it as a point of
@@ -822,7 +859,7 @@ pub fn send_append_entries(persistent: &mut Persistent, volatile: &mut Volatile)
             volatile.id.clone(),
             prev_log_index,
             prev_log_term,
-            persistent.commit_index,
+            volatile.commit_index,
             entries,
         );
     }
