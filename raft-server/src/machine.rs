@@ -13,7 +13,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{error, info};
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -761,7 +761,14 @@ pub fn on_append_entries_resp(
     if let Ok(resp) = resp {
         if resp.success {
             // Means that node successfully replicated to that point.
-            *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
+            if let Some(match_index) = volatile.match_index.get_mut(&node_id) {
+                *match_index = batch_end_log_index;
+            } else {
+                error!(
+                    ">>>>>>> Can't find node {}:{} in match index!!!!",
+                    node_id.host, node_id.port
+                );
+            }
 
             // FIXME - This implementation is insufficient, that condition doesn't ascertain
             // that we replicated a specific index to the majority of the cluster's nodes.

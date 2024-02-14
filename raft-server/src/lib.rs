@@ -9,6 +9,7 @@ use raft_common::{
 };
 use seed::Seed;
 use tonic::transport::Server;
+use tracing::error;
 
 pub mod entry;
 pub mod grpc;
@@ -70,17 +71,24 @@ impl Node {
             .parse()
             .unwrap();
 
+        let port = self.id.port;
+        let host = self.id.host.clone();
         // println!("Listening on {}:{}", self.id.host, self.id.port);
         let client = self.client.clone();
         let (send_shutdown, receive_shutdown) = tokio::sync::oneshot::channel();
         self.runtime.spawn(async move {
-            Server::builder()
+            let result = Server::builder()
                 .add_service(RaftServer::new(RaftImpl::new(client.clone())))
                 .add_service(ApiServer::new(ApiImpl::new(client)))
                 .serve_with_shutdown(addr, async move {
                     let _ = receive_shutdown.await;
                 })
-                .await
+                .await;
+
+            error!(
+                "<<<<< !!!! Node on {}:{} shutdown {:?} !!!! >>>>>>>>",
+                host, port, result
+            );
         });
 
         self.shutdown_send = Some(send_shutdown);

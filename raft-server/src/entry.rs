@@ -27,6 +27,10 @@ impl Entries {
     }
 
     pub fn contains_log(&self, index: u64, term: u64) -> bool {
+        if index == 0 && self.inner.is_empty() {
+            return true;
+        }
+
         for entry in &self.inner {
             if entry.index == index && entry.term == term {
                 return true;

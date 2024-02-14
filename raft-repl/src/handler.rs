@@ -5,16 +5,19 @@ use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;
 use raft_common::client::ApiClient;
-use raft_common::{AppendReq, ReadReq};
+use raft_common::{AppendReq, AppendResp, ReadReq};
 use raft_server::{options, Node};
 use std::process::Stdio;
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 use tokio::process::Command;
 use tokio::runtime::Handle;
+use tokio::time::error::Elapsed;
+use tokio::time::timeout;
 use tonic::body::BoxBody;
 use tonic::codegen::tokio_stream::StreamExt;
-use tonic::Request;
-use tracing::error;
+use tonic::{Request, Response, Status};
+use tracing::{error, info};
 
 type GrpcClient = ApiClient<Client<HttpConnector, BoxBody>>;
 
@@ -122,25 +125,40 @@ impl CommandHandler {
     }
 
     pub async fn append_stream(&mut self, stream_name: String, events: Vec<Bytes>) {
-        if let ProcState::Connected { client, .. } = &mut self.proc {
-            if let Err(e) = client
-                .append(Request::new(AppendReq {
-                    stream_id: stream_name.clone(),
-                    events,
-                }))
-                .await
-            {
-                let _ = self.mailbox.send(ReplEvent::error(format!(
-                    "node {}: Error when appending: {} ",
-                    self.index,
-                    e.message()
-                )));
-            } else {
-                let _ = self.mailbox.send(ReplEvent::msg(format!(
-                    "node {}: append successful",
-                    self.index
-                )));
-            }
+        if let ProcState::Connected { client, port, .. } = &mut self.proc {
+            info!(
+                "node_127.0.0.1:{} <<< Before sending append request...",
+                *port
+            );
+
+            let operation = client.append(Request::new(AppendReq {
+                stream_id: stream_name.clone(),
+                events,
+            }));
+
+            match timeout(Duration::from_secs(2), operation).await {
+                Err(_) => {
+                    let _ = self.mailbox.send(ReplEvent::error(format!(
+                        "node {}: timed out when appending stream {}",
+                        self.index, stream_name,
+                    )));
+                }
+
+                Ok(res) => {
+                    if let Err(e) = res {
+                        let _ = self.mailbox.send(ReplEvent::error(format!(
+                            "node {}: Error when appending: {} ",
+                            self.index,
+                            e.message()
+                        )));
+                    } else {
+                        let _ = self.mailbox.send(ReplEvent::msg(format!(
+                            "node {}: append successful",
+                            self.index
+                        )));
+                    }
+                }
+            };
 
             return;
         }
