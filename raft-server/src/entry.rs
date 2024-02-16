@@ -94,7 +94,7 @@ impl Entries {
         let mut count = 0;
         let mut batch = Vec::new();
 
-        if self.last_index > index {
+        if self.last_index >= index {
             for entry in &self.inner {
                 if entry.index < index {
                     continue;

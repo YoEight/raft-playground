@@ -761,14 +761,7 @@ pub fn on_append_entries_resp(
     if let Ok(resp) = resp {
         if resp.success {
             // Means that node successfully replicated to that point.
-            if let Some(match_index) = volatile.match_index.get_mut(&node_id) {
-                *match_index = batch_end_log_index;
-            } else {
-                error!(
-                    ">>>>>>> Can't find node {}:{} in match index!!!!",
-                    node_id.host, node_id.port
-                );
-            }
+            *volatile.match_index.get_mut(&node_id) = batch_end_log_index;
 
             // FIXME - This implementation is insufficient, that condition doesn't ascertain
             // that we replicated a specific index to the majority of the cluster's nodes.
@@ -865,9 +858,7 @@ pub fn send_append_entries(persistent: &mut Persistent, volatile: &mut Volatile)
 
         let (prev_log_index, prev_log_term) = persistent.entries.get_previous_entry(*next_index);
 
-        let entries = persistent
-            .entries
-            .read_entries_from(prev_log_index + 1, 500);
+        let entries = persistent.entries.read_entries_from(prev_log_index, 500);
 
         seed.send_append_entries(
             persistent.term,
