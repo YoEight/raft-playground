@@ -1,11 +1,11 @@
 use crate::entry::{Entries, RecordedEvent};
-use crate::seed::Seed;
+use crate::seed::{Seed, Seeds};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use eyre::bail;
 use raft_common::{Entry, NodeId};
 use rand::{thread_rng, Rng};
 use std::cmp::min;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -13,7 +13,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tracing::{error, info};
+use tracing::info;
 
 const HEARTBEAT_DELAY: Duration = Duration::from_millis(30);
 
@@ -149,11 +149,9 @@ impl Persistent {
 pub struct Volatile {
     pub id: NodeId,
     pub leader: Option<NodeId>,
-    pub seeds: Vec<Seed>,
+    pub seeds: Seeds,
     pub status: Status,
     pub voted_for: Option<NodeId>,
-    pub next_index: HashMap<NodeId, u64>,
-    pub match_index: HashMap<NodeId, u64>,
     pub election_timeout: Instant,
     pub election_timeout_range: ElectionTimeoutRange,
     pub tally: HashSet<NodeId>,
@@ -178,13 +176,11 @@ impl Volatile {
         };
 
         Self {
-            id,
-            seeds,
+            id: id.clone(),
+            seeds: Seeds::new(id, seeds),
             status,
             leader: None,
             voted_for: None,
-            next_index: Default::default(),
-            match_index: Default::default(),
             election_timeout: Instant::now(),
             election_timeout_range: Default::default(),
             tally: Default::default(),
@@ -203,13 +199,12 @@ impl Volatile {
         1 + self.tally.len() > self.cluster_size() / 2
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, persistent: &Persistent) {
         self.voted_for = None;
         self.tally.clear();
-        self.match_index.clear();
-        self.next_index.clear();
         self.commit_index = 0;
         self.last_applied = 0;
+        self.seeds.reset(persistent.entries.last_index());
 
         for (_, sender) in self.inflights.drain(..) {
             let _ = sender.send(None);
@@ -218,16 +213,6 @@ impl Volatile {
 
     pub fn election_timeout(&self) -> bool {
         self.election_timeout.elapsed() >= self.election_timeout_range.duration
-    }
-
-    pub fn node(&self, node_id: &NodeId) -> &Seed {
-        for seed in &self.seeds {
-            if &seed.id == node_id {
-                return seed;
-            }
-        }
-
-        panic!("Unknown node {}:{}", node_id.host, node_id.port)
     }
 }
 
@@ -512,7 +497,7 @@ fn state_machine(
             }
 
             Msg::ReadStream { stream_id, resp } => {
-                on_read_stream(&mut persistent, &mut volatile, stream_id, resp);
+                on_read_stream(&mut persistent, stream_id, resp);
             }
 
             Msg::Status { resp } => {
@@ -535,7 +520,6 @@ fn on_status(persistent: &Persistent, volatile: &Volatile, resp: oneshot::Sender
 
 fn on_read_stream(
     persistent: &mut Persistent,
-    volatile: &mut Volatile,
     stream_id: String,
     resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
 ) {
@@ -622,8 +606,6 @@ pub fn on_vote_received(
         volatile.election_timeout_range.pick_timeout_value();
         volatile.election_timeout = Instant::now();
         volatile.voted_for = None;
-        volatile.next_index.clear();
-        volatile.match_index.clear();
 
         info!(
             "Node_{}:{} [term={}]switched to follower because received an higher [term={}] from vote for {}:{}",
@@ -759,17 +741,14 @@ pub fn on_append_entries_resp(
         if resp.success {
             // If defined it means it was not a heartbeat request.
             if let Some(batch_end_log_index) = batch_end_log_index {
-                // Means that node successfully replicated to that point.
-                *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
-                *volatile.next_index.get_mut(&node_id).unwrap() = batch_end_log_index + 1;
-
-                // FIXME - This implementation is insufficient, that condition doesn't ascertain
-                // that we replicated a specific index to the majority of the cluster's nodes.
-                let mut lowest_replicated_index = u64::MAX;
-                for match_index in volatile.match_index.values() {
-                    lowest_replicated_index = min(lowest_replicated_index, *match_index);
+                {
+                    let seed = volatile.seeds.node_mut(&node_id);
+                    // Means that node successfully replicated to that point.
+                    seed.match_index = batch_end_log_index;
+                    seed.next_index = batch_end_log_index + 1;
                 }
 
+                let lowest_replicated_index = volatile.seeds.compute_lowest_replicated_index();
                 let mut temp = Vec::new();
                 for (index, sender) in volatile.inflights.drain(..) {
                     if index <= lowest_replicated_index {
@@ -787,8 +766,8 @@ pub fn on_append_entries_resp(
             // In this case we decrease what we thought was the next entry index of the follower
             // node. From there we find the previous entry to this index and pass it as a point of
             // reference to maintain log consistency.
-            let next_index = volatile.next_index.get_mut(&node_id).unwrap();
-            *next_index = next_index.saturating_sub(1);
+            let seed = volatile.seeds.node_mut(&node_id);
+            seed.next_index = seed.next_index.saturating_sub(1);
         }
 
         return;
@@ -801,18 +780,12 @@ pub fn on_append_entries_resp(
 fn switch_to_leader(persistent: &mut Persistent, volatile: &mut Volatile) {
     volatile.status = Status::Leader;
     volatile.leader = Some(volatile.id.clone());
-    volatile.reset();
+    volatile.reset(&persistent);
 
     info!(
         "Node_{}:{} [term={}] switched to leader",
         volatile.id.host, volatile.id.port, persistent.term
     );
-
-    let next_index_init = persistent.entries.last_index() + 1;
-    for seed in &volatile.seeds {
-        volatile.match_index.insert(seed.id.clone(), 0);
-        volatile.next_index.insert(seed.id.clone(), next_index_init);
-    }
 
     // Send heartbeat request to assert dominance.
     send_append_entries(persistent, volatile);
@@ -835,42 +808,13 @@ fn switch_to_candidate(persistent: &mut Persistent, volatile: &mut Volatile) {
         persistent.term,
     );
 
-    let last_log_index = persistent.entries.last_index();
-    let last_log_term = persistent.entries.last_term();
-
-    for seed in &volatile.seeds {
-        seed.request_vote(
-            persistent.term,
-            volatile.id.clone(),
-            last_log_index,
-            last_log_term,
-        );
-    }
+    volatile.seeds.request_vote(persistent);
 }
 
 pub fn send_append_entries(persistent: &mut Persistent, volatile: &mut Volatile) {
-    let last_log_index = persistent.entries.last_index();
+    let commit_index = volatile.commit_index;
 
-    for seed in volatile.seeds.clone() {
-        let next_index = volatile
-            .next_index
-            .entry(seed.id.clone())
-            .or_insert(last_log_index + 1);
-
-        let (prev_log_index, prev_log_term) = persistent.entries.get_previous_entry(*next_index);
-
-        let entries = persistent.entries.read_entries_from(prev_log_index, 500);
-
-        seed.send_append_entries(
-            persistent.term,
-            volatile.id.clone(),
-            prev_log_index,
-            prev_log_term,
-            volatile.commit_index,
-            entries,
-        );
-    }
-
+    volatile.seeds.send_append_entries(persistent, commit_index);
     volatile.heartbeat_timeout = Instant::now();
 }
 

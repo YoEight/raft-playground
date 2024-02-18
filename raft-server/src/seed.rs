@@ -1,11 +1,89 @@
-use crate::machine::{AppendEntriesResp, NodeClient};
+use crate::machine::{AppendEntriesResp, NodeClient, Persistent};
 use hyper::client::HttpConnector;
 use raft_common::client::RaftClient;
 use raft_common::{EntriesReq, Entry, NodeId, VoteReq};
+use std::cmp::min;
+use std::collections::HashMap;
 use std::time::Instant;
 use tokio::runtime::Handle;
 use tonic::Request;
 use tracing::debug;
+
+pub struct Seeds {
+    node_id: NodeId,
+    inner: HashMap<NodeId, Seed>,
+}
+
+impl Seeds {
+    pub fn new(node_id: NodeId, seeds: Vec<Seed>) -> Self {
+        let mut inner = HashMap::new();
+
+        for seed in seeds {
+            inner.insert(seed.id.clone(), seed);
+        }
+
+        Self { node_id, inner }
+    }
+
+    pub fn node_mut(&mut self, id: &NodeId) -> &mut Seed {
+        self.inner.get_mut(id).unwrap()
+    }
+
+    pub fn reset(&mut self, last_index: u64) {
+        for seed in self.inner.values_mut() {
+            seed.next_index = last_index + 1;
+            seed.match_index = 0;
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn send_append_entries(&self, persistent: &Persistent, commit_index: u64) {
+        for seed in self.inner.values() {
+            let (prev_log_index, prev_log_term) =
+                persistent.entries.get_previous_entry(seed.next_index);
+
+            let entries = persistent.entries.read_entries_from(prev_log_index, 500);
+            seed.send_append_entries(
+                persistent.term,
+                self.node_id.clone(),
+                prev_log_index,
+                prev_log_term,
+                commit_index,
+                entries,
+            )
+        }
+    }
+
+    pub fn request_vote(&self, persistent: &Persistent) {
+        let last_log_index = persistent.entries.last_index();
+        let last_log_term = persistent.entries.last_term();
+
+        for seed in self.inner.values() {
+            seed.request_vote(
+                persistent.term,
+                self.node_id.clone(),
+                last_log_index,
+                last_log_term,
+            );
+        }
+    }
+
+    pub fn compute_lowest_replicated_index(&self) -> u64 {
+        let mut lowest_replicated_index = u64::MAX;
+        for seed in self.inner.values() {
+            lowest_replicated_index = min(lowest_replicated_index, seed.match_index);
+        }
+
+        lowest_replicated_index
+    }
+}
 
 pub type HyperClient = hyper::Client<HttpConnector, tonic::body::BoxBody>;
 
@@ -14,6 +92,8 @@ pub struct Seed {
     pub id: NodeId,
     pub mailbox: NodeClient,
     pub client: RaftClient<HyperClient>,
+    pub next_index: u64,
+    pub match_index: u64,
     runtime: Handle,
 }
 
@@ -30,6 +110,8 @@ impl Seed {
             mailbox,
             client,
             runtime,
+            next_index: 0,
+            match_index: 0,
         }
     }
 
