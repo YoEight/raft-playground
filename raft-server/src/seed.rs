@@ -76,9 +76,9 @@ impl Seed {
         self.runtime.spawn(async move {
             let stopwatch = Instant::now();
             let batch_end_log_index = if let Some(last) = entries.last() {
-                last.index
+                Some(last.index)
             } else {
-                prev_log_index
+                None
             };
 
             let resp = client

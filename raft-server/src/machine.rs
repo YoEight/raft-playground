@@ -45,7 +45,7 @@ pub enum Msg {
 
     AppendEntriesResp {
         node_id: NodeId,
-        batch_end_log_index: u64,
+        batch_end_log_index: Option<u64>,
         resp: tonic::Result<AppendEntriesResp>,
     },
 
@@ -373,7 +373,7 @@ impl NodeClient {
     pub fn append_entries_response_received(
         &self,
         node_id: NodeId,
-        batch_end_log_index: u64,
+        batch_end_log_index: Option<u64>,
         resp: Result<AppendEntriesResp, tonic::Status>,
     ) {
         let _ = self.sender.send(Msg::AppendEntriesResp {
@@ -539,7 +539,6 @@ fn on_read_stream(
     stream_id: String,
     resp: oneshot::Sender<Option<Vec<RecordedEvent>>>,
 ) {
-    let mut global = 0;
     let mut revision = 0;
     let stream_id_bytes = stream_id.as_bytes();
     let mut batch = Vec::new();
@@ -552,14 +551,12 @@ fn on_read_stream(
         if str_bytes == stream_id_bytes {
             batch.push(RecordedEvent {
                 stream_id: stream_id.clone(),
-                global,
+                global: entry.index,
                 revision,
                 payload,
             });
 
             revision += 1;
-        } else {
-            global += 1;
         }
     }
 
@@ -751,7 +748,7 @@ pub fn on_request_vote(
 pub fn on_append_entries_resp(
     volatile: &mut Volatile,
     node_id: NodeId,
-    batch_end_log_index: u64,
+    batch_end_log_index: Option<u64>,
     resp: tonic::Result<AppendEntriesResp>,
 ) {
     if volatile.status != Status::Leader {
@@ -760,28 +757,32 @@ pub fn on_append_entries_resp(
 
     if let Ok(resp) = resp {
         if resp.success {
-            // Means that node successfully replicated to that point.
-            *volatile.match_index.get_mut(&node_id) = batch_end_log_index;
+            // If defined it means it was not a heartbeat request.
+            if let Some(batch_end_log_index) = batch_end_log_index {
+                // Means that node successfully replicated to that point.
+                *volatile.match_index.get_mut(&node_id).unwrap() = batch_end_log_index;
+                *volatile.next_index.get_mut(&node_id).unwrap() = batch_end_log_index + 1;
 
-            // FIXME - This implementation is insufficient, that condition doesn't ascertain
-            // that we replicated a specific index to the majority of the cluster's nodes.
-            let mut lowest_replicated_index = u64::MAX;
-            for match_index in volatile.match_index.values() {
-                lowest_replicated_index = min(lowest_replicated_index, *match_index);
-            }
-
-            let mut temp = Vec::new();
-            for (index, sender) in volatile.inflights.drain(..) {
-                if index <= lowest_replicated_index {
-                    let _ = sender.send(Some(index));
-                    continue;
+                // FIXME - This implementation is insufficient, that condition doesn't ascertain
+                // that we replicated a specific index to the majority of the cluster's nodes.
+                let mut lowest_replicated_index = u64::MAX;
+                for match_index in volatile.match_index.values() {
+                    lowest_replicated_index = min(lowest_replicated_index, *match_index);
                 }
 
-                temp.push((index, sender));
-            }
+                let mut temp = Vec::new();
+                for (index, sender) in volatile.inflights.drain(..) {
+                    if index <= lowest_replicated_index {
+                        let _ = sender.send(Some(index));
+                        continue;
+                    }
 
-            volatile.inflights = temp;
-            volatile.commit_index = lowest_replicated_index;
+                    temp.push((index, sender));
+                }
+
+                volatile.inflights = temp;
+                volatile.commit_index = lowest_replicated_index;
+            }
         } else {
             // In this case we decrease what we thought was the next entry index of the follower
             // node. From there we find the previous entry to this index and pass it as a point of

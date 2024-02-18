@@ -94,18 +94,16 @@ impl Entries {
         let mut count = 0;
         let mut batch = Vec::new();
 
-        if self.last_index >= index {
-            for entry in &self.inner {
-                if entry.index < index {
-                    continue;
-                }
+        for entry in &self.inner {
+            if entry.index <= index {
+                continue;
+            }
 
-                batch.push(entry.clone());
-                count += 1;
+            batch.push(entry.clone());
+            count += 1;
 
-                if count >= max_count {
-                    break;
-                }
+            if count >= max_count {
+                break;
             }
         }
 
