@@ -651,7 +651,8 @@ pub fn on_append_entries(
     // figuring out.
     volatile.election_timeout = Instant::now();
     volatile.status = Status::Follower;
-    volatile.leader = Some(leader_id);
+    volatile.leader = Some(leader_id.clone());
+    volatile.voted_for = Some(leader_id);
 
     info!(
         "Node_{}:{} [term={}] is a follower because received a valid replication request -> [term={}]",
