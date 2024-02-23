@@ -325,6 +325,7 @@ impl State {
                 self.mailbox.clone(),
                 port,
                 seeds,
+                args.r#type,
             )?);
         }
 
@@ -343,7 +344,7 @@ impl State {
 
     fn start_node(&mut self, args: Start) -> eyre::Result<()> {
         if let Some(node) = self.nodes.get_mut(args.node) {
-            node.start();
+            node.start(args.r#type);
             return Ok(());
         }
 
@@ -352,7 +353,7 @@ impl State {
 
     fn restart_node(&mut self, args: Restart) -> eyre::Result<()> {
         if let Some(node) = self.nodes.get_mut(args.node) {
-            node.start();
+            node.start(args.r#type);
             return Ok(());
         }
 

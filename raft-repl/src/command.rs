@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -31,6 +31,9 @@ pub enum Command {
 pub struct Spawn {
     #[arg(long)]
     pub count: usize,
+
+    #[arg(long, default_value = "managed")]
+    pub r#type: ProcType,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -51,6 +54,9 @@ pub struct Start {
 
     #[arg(long)]
     pub port: Option<usize>,
+
+    #[arg(long, default_value = "managed")]
+    pub r#type: ProcType,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -58,6 +64,9 @@ pub struct Start {
 pub struct Restart {
     #[arg(long)]
     pub node: usize,
+
+    #[arg(long, default_value = "managed")]
+    pub r#type: ProcType,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -111,4 +120,17 @@ pub struct PingExternal {
 pub struct StatusNode {
     /// Node index
     pub node: usize,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcType {
+    Managed,
+    Binary,
+    External,
+}
+
+impl Default for ProcType {
+    fn default() -> Self {
+        ProcType::Managed
+    }
 }

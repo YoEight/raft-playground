@@ -1,6 +1,7 @@
+use crate::command::ProcType;
 use crate::data::RecordedEvent;
 use crate::events::{ReplEvent, StatusRead};
-use crate::node::{ProcKind, ProcType};
+use crate::node::ProcKind;
 use bytes::Bytes;
 use hyper::client::HttpConnector;
 use hyper::Client;

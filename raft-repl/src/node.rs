@@ -1,4 +1,4 @@
-use crate::command::{AppendToStream, ReadStream};
+use crate::command::{AppendToStream, ProcType, ReadStream};
 use crate::events::ReplEvent;
 use crate::handler::CommandHandler;
 use bytes::Bytes;
@@ -52,6 +52,7 @@ impl Node {
         mailbox: mpsc::Sender<ReplEvent>,
         port: u16,
         seeds: Vec<u16>,
+        r#type: ProcType,
     ) -> eyre::Result<Self> {
         let name_gen = Generator::default();
         let (local_mailbox, local_receiver) = unbounded_channel();
@@ -72,7 +73,7 @@ impl Node {
             local_receiver,
         ));
 
-        node.start();
+        node.start(r#type);
 
         Ok(node)
     }
@@ -93,11 +94,11 @@ impl Node {
         let _ = self.local_mailbox.send(NodeCmd::Stop);
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self, r#type: ProcType) {
         let _ = self.local_mailbox.send(NodeCmd::Start {
             port: self.port as u16,
             seeds: self.seeds.clone(),
-            r#type: ProcType::Managed,
+            r#type,
         });
     }
 
@@ -139,12 +140,6 @@ impl Node {
         let _ = self.local_mailbox.send(NodeCmd::Cleanup(sender));
         let _ = self.handle.block_on(receive);
     }
-}
-
-pub enum ProcType {
-    Managed,
-    Binary,
-    External,
 }
 
 enum NodeCmd {
